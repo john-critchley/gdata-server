@@ -14,8 +14,11 @@ import sys
 import os
 import zipfile
 import json
-import subprocess
 import tempfile
+
+# Add current directory to path to import notes_client
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import notes_client
 
 def filename_to_node_name(filename):
     """Convert filename to node name according to the rules."""
@@ -33,22 +36,18 @@ def filename_to_node_name(filename):
     return name.replace('_', '/')
 
 def load_json_to_notes(node_name, json_content):
-    """Load JSON content into notes using the notes command."""
+    """Load JSON content into notes using the notes_client module."""
     try:
-        # Use notes write-stdin to load the content
-        process = subprocess.run(
-            ['notes', 'write-stdin', node_name],
-            input=json_content,
-            text=True,
-            capture_output=True,
-            check=True
-        )
-        print(f"✓ Loaded: '{node_name}'")
-        return True
-    except subprocess.CalledProcessError as e:
+        # Use notes_client module to load the content
+        success = notes_client.write_doc_raw(node_name, json_content)
+        if success:
+            print(f"✓ Loaded: '{node_name}'")
+            return True
+        else:
+            print(f"✗ Failed to load '{node_name}': API request failed")
+            return False
+    except Exception as e:
         print(f"✗ Failed to load '{node_name}': {e}")
-        if e.stderr:
-            print(f"  Error: {e.stderr}")
         return False
 
 def process_zip_file(zip_path):
@@ -115,12 +114,16 @@ def main():
     zip_files = sys.argv[1:]
     total_loaded = 0
     
-    # Check if notes command is available
+    # Check if notes_client can connect to server
     try:
-        subprocess.run(['notes', 'list'], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("✗ Error: 'notes' command not found or not working")
-        print("  Make sure the gdata server is running and notes client is available")
+        keys = notes_client.list_docs()
+        if isinstance(keys, str) and 'Error' in keys:
+            print("✗ Error: Unable to connect to notes server")
+            print("  Make sure the gdata server is running on the expected port")
+            sys.exit(1)
+    except Exception as e:
+        print("✗ Error: Unable to connect to notes server")
+        print(f"  Error: {e}")
         sys.exit(1)
     
     for zip_path in zip_files:
@@ -136,9 +139,15 @@ def main():
     # List current nodes to show what's available
     print("\nCurrent documents:")
     try:
-        result = subprocess.run(['notes', 'list'], capture_output=True, text=True, check=True)
-        print(result.stdout)
-    except subprocess.CalledProcessError:
+        keys = notes_client.list_docs()
+        if isinstance(keys, list):
+            print("Documents:")
+            for key in keys:
+                display_key = '""' if key == "" else key
+                print(f"  {display_key}")
+        else:
+            print("  (Could not list documents)")
+    except Exception:
         print("  (Could not list documents)")
 
 if __name__ == '__main__':

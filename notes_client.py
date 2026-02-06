@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
 Agent Notes Client - Python interface for the gdata notes server
+Can be used as both a command-line tool and imported as a module.
 """
 import requests
 import json
 import sys
+import os
 
-NOTES_URL = "http://127.0.0.1:8021"
+# Default URL, can be overridden via environment variable
+NOTES_URL = os.getenv('NOTES_URL', "http://127.0.0.1:8021")
 
 def read_doc(key=""):
     """Read a document by key (empty string for root)"""
@@ -62,6 +65,19 @@ def list_docs():
         return keys
     except requests.exceptions.RequestException as e:
         return f"Error listing documents: {e}"
+
+def write_doc_raw(key, json_content):
+    """Write raw JSON content directly to a document (for module use)"""
+    try:
+        headers = {'Content-Type': 'application/json'}
+        if key == "":
+            response = requests.put(f"{NOTES_URL}/", data=json_content, headers=headers)
+        else:
+            response = requests.put(f"{NOTES_URL}/{key}", data=json_content, headers=headers)
+        response.raise_for_status()
+        return True
+    except requests.exceptions.RequestException:
+        return False
 
 def delete_doc(key):
     """Delete a document"""
