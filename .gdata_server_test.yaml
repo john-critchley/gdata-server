@@ -1,0 +1,3 @@
+gdbm_file: /home/john/py/gdata-server/.test.gdbm
+gdata_server_port: 8020
+gdata_server_host: 127.0.0.1

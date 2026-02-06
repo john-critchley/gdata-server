@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""
+Export notes from the notes system to archive files.
+
+Usage: dump_notes [-f FORMAT] output_file
+
+Formats:
+  zip (default) - ZIP archive with directory structure
+  tar           - TAR archive with directory structure
+
+Node name conversion:
+- Root node "" -> _root.json
+- Hierarchical nodes like "README/keys" -> README/keys.json (preserving directory structure)
+"""
+
+import sys
+import os
+import subprocess
+import json
+import zipfile
+import tarfile
+import argparse
+from pathlib import Path
+
+def node_name_to_filename(node_name):
+    """Convert node name to filename according to the rules."""
+    # Root node becomes _root.json
+    if node_name == '':
+        return '_root.json'
+    
+    # Add .json extension, preserve / for directory structure
+    return f'{node_name}.json'
+
+def get_all_notes():
+    """Get all notes from the system."""
+    try:
+        # Get list of all document names
+        result = subprocess.run(['notes', 'list'], capture_output=True, text=True, check=True)
+        
+        # Parse the output to extract document names
+        lines = result.stdout.strip().split('\n')
+        documents = []
+        in_list = False
+        
+        for line in lines:
+            stripped = line.strip()
+            if stripped == 'Documents:':
+                in_list = True
+                continue
+            if in_list and stripped and not stripped.startswith('Documents:'):
+                # Extract document name (remove leading/trailing quotes if present)
+                doc_name = stripped.strip('"')
+                documents.append(doc_name)
+        
+        return documents
+    except subprocess.CalledProcessError as e:
+        print(f"✗ Error getting document list: {e}")
+        return []
+
+def get_note_content(node_name):
+    """Get the content of a specific note."""
+    try:
+        result = subprocess.run(['notes', 'read', node_name], capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        print(f"✗ Error reading '{node_name}': {e}")
+        return None
+
+def create_zip_archive(output_file, documents):
+    """Create a ZIP archive with the documents."""
+    with zipfile.ZipFile(output_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for doc_name in documents:
+            print(f"  Exporting: '{doc_name}'")
+            
+            content = get_note_content(doc_name)
+            if content is None:
+                continue
+                
+            filename = node_name_to_filename(doc_name)
+            
+            # Add to zip with directory structure preserved
+            zf.writestr(filename, content)
+    
+    print(f"✓ Created ZIP archive: {output_file}")
+
+def create_tar_archive(output_file, documents):
+    """Create a TAR archive with the documents."""
+    with tarfile.open(output_file, 'w') as tf:
+        for doc_name in documents:
+            print(f"  Exporting: '{doc_name}'")
+            
+            content = get_note_content(doc_name)
+            if content is None:
+                continue
+                
+            filename = node_name_to_filename(doc_name)
+            
+            # Create tarinfo for the file
+            tarinfo = tarfile.TarInfo(name=filename)
+            content_bytes = content.encode('utf-8')
+            tarinfo.size = len(content_bytes)
+            
+            # Add to tar with directory structure preserved
+            import io
+            tf.addfile(tarinfo, io.BytesIO(content_bytes))
+    
+    print(f"✓ Created TAR archive: {output_file}")
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Export notes from the notes system to archive files.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Node name conversion:
+  - Root node "" -> _root.json
+  - Hierarchical nodes like "README/keys" -> README/keys.json (preserving directory structure)
+
+Examples:
+  dump_notes backup.zip                    # Create ZIP archive
+  dump_notes -f tar backup.tar           # Create TAR archive
+  dump_notes --format zip backup.zip     # Explicit ZIP format
+"""
+    )
+    
+    parser.add_argument('output_file', help='Output archive file')
+    parser.add_argument('-f', '--format', choices=['zip', 'tar'], default='zip',
+                       help='Archive format (default: zip)')
+    
+    args = parser.parse_args()
+    
+    # Check if notes command is available
+    try:
+        subprocess.run(['notes', 'list'], capture_output=True, check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("✗ Error: 'notes' command not found or not working")
+        print("  Make sure the gdata server is running and notes client is available")
+        sys.exit(1)
+    
+    # Get all documents
+    print("Getting document list...")
+    documents = get_all_notes()
+    
+    if not documents:
+        print("✗ No documents found to export")
+        sys.exit(1)
+    
+    print(f"Found {len(documents)} documents to export")
+    
+    # Create output directory if needed
+    output_path = Path(args.output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Export based on format
+    if args.format == 'zip':
+        create_zip_archive(args.output_file, documents)
+    elif args.format == 'tar':
+        create_tar_archive(args.output_file, documents)
+    
+    print(f"\n✓ Successfully exported {len(documents)} documents to {args.output_file}")
+    
+    # Show archive contents
+    print(f"\nArchive contents:")
+    if args.format == 'zip':
+        try:
+            result = subprocess.run(['unzip', '-l', args.output_file], capture_output=True, text=True)
+            print(result.stdout)
+        except:
+            print("  (Could not list ZIP contents)")
+    elif args.format == 'tar':
+        try:
+            result = subprocess.run(['tar', '-tf', args.output_file], capture_output=True, text=True)
+            print(result.stdout)
+        except:
+            print("  (Could not list TAR contents)")
+
+if __name__ == '__main__':
+    main()
