@@ -1,0 +1,34 @@
+# Database files
+*.gdbm
+*.gdbm.*
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Log files
+*.log
+
+# Backup files
+*.backup
+*.SAFE_BACKUP_*
+
+# Temporary files
+*.tmp
+*.temp
+
+# Archive test files
+test_*.zip
+test_*.tar
+
+# Configuration overrides (keep templates)
+# .gdata_server_local.yaml
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
