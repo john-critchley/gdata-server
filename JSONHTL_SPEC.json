@@ -1,0 +1,345 @@
+{
+  "title": "JSONHTL - JSON Hypertext Language",
+  "content": [
+    {
+      "heading": {
+        "level": 1,
+        "text": "JSONHTL - JSON Hypertext Language"
+      }
+    },
+    {
+      "para": [
+        "Version 0.1 — Draft"
+      ]
+    },
+    {
+      "para": [
+        "JSONHTL is a minimal document format encoded as JSON. It is designed to be trivially parseable by LLMs and straightforwardly convertible to HTML or other presentation formats by simple renderers."
+      ]
+    },
+    {
+      "para": [
+        "JSONHTL defines only primitive building blocks. Higher-level conventions (document metadata, node hierarchies, runnable documents, etc.) are defined in separate convention documents linked from the root node of a given system."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Document Structure"
+      }
+    },
+    {
+      "para": [
+        "A JSONHTL document is a JSON object. The only required key is ",
+        {
+          "code": "content"
+        },
+        "."
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\n  \"title\": \"Example Document\",\n  \"content\": [...]\n}"
+      }
+    },
+    {
+      "para": [
+        {
+          "code": "title"
+        },
+        " is optional but conventional. Any other top-level keys are permitted; their meaning is defined by convention documents, not this spec. Renderers and consumers should ignore keys they do not recognise."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Content"
+      }
+    },
+    {
+      "para": [
+        {
+          "code": "content"
+        },
+        " is either a string (shorthand for a single paragraph of plain text) or a list of block elements. When it is a list, each block is a JSON object with a single identifying key."
+      ]
+    },
+    {
+      "para": [
+        "A string value:"
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\"title\": \"Quick note\", \"content\": \"Remember to update the config.\"}"
+      }
+    },
+    {
+      "para": [
+        "is equivalent to:"
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\"title\": \"Quick note\", \"content\": [{\"para\": [\"Remember to update the config.\"]}]}"
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "Block Elements"
+      }
+    },
+    {
+      "heading": {
+        "level": 4,
+        "text": "para"
+      }
+    },
+    {
+      "para": [
+        "A paragraph. Contains a list of inline elements."
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\"para\": [\"This is plain text with a \", {\"link\": {\"href\": \"other-node\", \"text\": \"link\"}}, \" in it.\"]}"
+      }
+    },
+    {
+      "heading": {
+        "level": 4,
+        "text": "heading"
+      }
+    },
+    {
+      "para": [
+        "A section heading. Contains ",
+        {
+          "code": "level"
+        },
+        " (integer, 1–6) and ",
+        {
+          "code": "text"
+        },
+        " (string)."
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\"heading\": {\"level\": 1, \"text\": \"Introduction\"}}"
+      }
+    },
+    {
+      "heading": {
+        "level": 4,
+        "text": "codeblock"
+      }
+    },
+    {
+      "para": [
+        "A block of code or preformatted text. Contains ",
+        {
+          "code": "lang"
+        },
+        " (string, may be empty) and ",
+        {
+          "code": "body"
+        },
+        " (string)."
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\"codeblock\": {\"lang\": \"python\", \"body\": \"print('hello')\"}}"
+      }
+    },
+    {
+      "para": [
+        "Additional keys on a codeblock (e.g. ",
+        {
+          "code": "name"
+        },
+        ", ",
+        {
+          "code": "exec"
+        },
+        ") are not defined by this spec but may be defined by convention documents."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Inline Elements"
+      }
+    },
+    {
+      "para": [
+        "Inline elements appear inside ",
+        {
+          "code": "para"
+        },
+        " lists. An inline element is either a string (plain text) or an object with a single identifying key."
+      ]
+    },
+    {
+      "heading": {
+        "level": 4,
+        "text": "Plain text"
+      }
+    },
+    {
+      "para": [
+        "A bare JSON string."
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "\"This is just text.\""
+      }
+    },
+    {
+      "heading": {
+        "level": 4,
+        "text": "link"
+      }
+    },
+    {
+      "para": [
+        "A hypertext reference. Contains ",
+        {
+          "code": "href"
+        },
+        " (string) and ",
+        {
+          "code": "text"
+        },
+        " (string)."
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\"link\": {\"href\": \"getting-started\", \"text\": \"Getting Started\"}}"
+      }
+    },
+    {
+      "para": [
+        "href resolution:"
+      ]
+    },
+    {
+      "para": [
+        "Starts with ",
+        {
+          "code": "http://"
+        },
+        " or ",
+        {
+          "code": "https://"
+        },
+        " — external web link. Anything else — a key in the local data store. The storage layer defines how keys map to documents; JSONHTL does not impose hierarchy or path semantics on keys."
+      ]
+    },
+    {
+      "para": [
+        "Note: the behaviour when following an external link (e.g. whether the target is another JSONHTL store, a web page, or something else) is not defined by this version of the spec and is reserved for future work."
+      ]
+    },
+    {
+      "heading": {
+        "level": 4,
+        "text": "code"
+      }
+    },
+    {
+      "para": [
+        "Inline code. Contains a string."
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\"code\": \"gdata_server.py\"}"
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "General Rules"
+      }
+    },
+    {
+      "para": [
+        "1. Lists or scalars. Where this spec defines a value as a list, a bare scalar (string, integer) is also acceptable as shorthand for a single-element list. Parsers should normalise to list form internally. For example, ",
+        {
+          "code": "{\"para\": \"just text\"}"
+        },
+        " is equivalent to ",
+        {
+          "code": "{\"para\": [\"just text\"]}"
+        },
+        "."
+      ]
+    },
+    {
+      "para": [
+        "2. Unknown keys are ignored. Blocks, inline elements, and top-level keys that a consumer does not recognise should be silently skipped. This allows convention documents to extend the format without breaking basic renderers."
+      ]
+    },
+    {
+      "para": [
+        "3. No presentation markup. JSONHTL does not define emphasis, bold, underline, font size, or colour. Content is semantic. Presentation is the renderer's concern."
+      ]
+    },
+    {
+      "para": [
+        "4. Convention documents over spec changes. New element types, metadata schemas, and structural conventions should be defined in convention documents stored within the system and linked from the root node — not by extending this spec."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Root Node Convention"
+      }
+    },
+    {
+      "para": [
+        "When JSONHTL documents are stored in a key-value system, the root node (typically the empty-string key ",
+        {
+          "code": "\"\""
+        },
+        ") serves as a bootstrap. It should:"
+      ]
+    },
+    {
+      "para": [
+        "Use only base JSONHTL elements (as defined in this spec) so any consumer can read it without prior knowledge. Briefly describe the link/navigation model. Link to convention documents that define any extended keys, metadata schemas, or organisational structures used in this particular system."
+      ]
+    },
+    {
+      "para": [
+        "An LLM or tool encountering the system for the first time reads the root node, follows only the links it needs, and stops. This keeps context window usage minimal."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Example Document"
+      }
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\n  \"title\": \"Project Overview\",\n  \"content\": [\n    {\n      \"heading\": {\n        \"level\": 1,\n        \"text\": \"gdata-server\"\n      }\n    },\n    {\n      \"para\": [\n        \"A FastAPI-based HTTP API for GDBM databases. See \",\n        {\n          \"link\": {\n            \"href\": \"gdata-server/api\",\n            \"text\": \"API documentation\"\n          }\n        },\n        \" for endpoint details.\"\n      ]\n    },\n    {\n      \"para\": [\n        \"Configuration is handled via \",\n        {\n          \"code\": \".gdata_server.yaml\"\n        },\n        \" or environment variables.\"\n      ]\n    },\n    {\n      \"codeblock\": {\n        \"lang\": \"bash\",\n        \"body\": \"uvicorn gdata_server:app --host 127.0.0.1 --port 8020\"\n      }\n    }\n  ]\n}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+gdbm_file: /tmp/test.gdbm
+gdata_server_port: 8021
+gdata_server_host: 127.0.0.1

@@ -1,0 +1,157 @@
+<h1 id="jsonhtl---json-hypertext-language">JSONHTL - JSON Hypertext
+Language</h1>
+<p><strong>Version 0.1 — Draft</strong></p>
+<p>JSONHTL is a minimal document format encoded as JSON. It is designed
+to be trivially parseable by LLMs and straightforwardly convertible to
+HTML or other presentation formats by simple renderers.</p>
+<p>JSONHTL defines only primitive building blocks. Higher-level
+conventions (document metadata, node hierarchies, runnable documents,
+etc.) are defined in separate convention documents linked from the root
+node of a given system.</p>
+<h2 id="document-structure">Document Structure</h2>
+<p>A JSONHTL document is a JSON object. The only required key is
+<code>content</code>.</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;title&quot;</span><span class="fu">:</span> <span class="st">&quot;Example Document&quot;</span><span class="fu">,</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;content&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="er">...</span><span class="ot">]</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p><code>title</code> is optional but conventional. Any other top-level
+keys are permitted; their meaning is defined by convention documents,
+not this spec. Renderers and consumers should ignore keys they do not
+recognise.</p>
+<h2 id="content">Content</h2>
+<p><code>content</code> is a list of <strong>block elements</strong>.
+Each block is a JSON object with a single identifying key.</p>
+<h3 id="block-elements">Block Elements</h3>
+<h4 id="para">para</h4>
+<p>A paragraph. Contains a list of <strong>inline elements</strong>.</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">&quot;para&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;This is plain text with a &quot;</span><span class="ot">,</span> <span class="fu">{</span><span class="dt">&quot;link&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;href&quot;</span><span class="fu">:</span> <span class="st">&quot;other-node&quot;</span><span class="fu">,</span> <span class="dt">&quot;text&quot;</span><span class="fu">:</span> <span class="st">&quot;link&quot;</span><span class="fu">}}</span><span class="ot">,</span> <span class="st">&quot; in it.&quot;</span><span class="ot">]</span><span class="fu">}</span></span></code></pre></div>
+<h4 id="heading">heading</h4>
+<p>A section heading. Contains <code>level</code> (integer, 1–6) and
+<code>text</code> (string).</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">&quot;heading&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;level&quot;</span><span class="fu">:</span> <span class="dv">1</span><span class="fu">,</span> <span class="dt">&quot;text&quot;</span><span class="fu">:</span> <span class="st">&quot;Introduction&quot;</span><span class="fu">}}</span></span></code></pre></div>
+<h4 id="codeblock">codeblock</h4>
+<p>A block of code or preformatted text. Contains <code>lang</code>
+(string, may be empty) and <code>body</code> (string).</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">&quot;codeblock&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;lang&quot;</span><span class="fu">:</span> <span class="st">&quot;python&quot;</span><span class="fu">,</span> <span class="dt">&quot;body&quot;</span><span class="fu">:</span> <span class="st">&quot;print(&#39;hello&#39;)&quot;</span><span class="fu">}}</span></span></code></pre></div>
+<p>Additional keys on a codeblock (e.g. <code>name</code>,
+<code>exec</code>) are not defined by this spec but may be defined by
+convention documents.</p>
+<h2 id="inline-elements">Inline Elements</h2>
+<p>Inline elements appear inside <code>para</code> lists. An inline
+element is either a <strong>string</strong> (plain text) or an
+<strong>object</strong> with a single identifying key.</p>
+<h4 id="plain-text">Plain text</h4>
+<p>A bare JSON string.</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="er">&quot;This</span> <span class="er">is</span> <span class="er">just</span> <span class="er">text.&quot;</span></span></code></pre></div>
+<h4 id="link">link</h4>
+<p>A hypertext reference. Contains <code>href</code> (string) and
+<code>text</code> (string).</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">&quot;link&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;href&quot;</span><span class="fu">:</span> <span class="st">&quot;getting-started&quot;</span><span class="fu">,</span> <span class="dt">&quot;text&quot;</span><span class="fu">:</span> <span class="st">&quot;Getting Started&quot;</span><span class="fu">}}</span></span></code></pre></div>
+<p><strong>href resolution:</strong></p>
+<ul>
+<li>Starts with <code>http://</code> or <code>https://</code> — external
+web link.</li>
+<li>Anything else — a key in the local data store. The storage layer
+defines how keys map to documents; JSONHTL does not impose hierarchy or
+path semantics on keys.</li>
+</ul>
+<h4 id="code">code</h4>
+<p>Inline code. Contains a string.</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">&quot;code&quot;</span><span class="fu">:</span> <span class="st">&quot;gdata_server.py&quot;</span><span class="fu">}</span></span></code></pre></div>
+<h2 id="general-rules">General Rules</h2>
+<ol type="1">
+<li><p><strong>Lists or scalars.</strong> Where this spec shows a list,
+a bare scalar (string, integer) is also acceptable as shorthand for a
+single-element list. Parsers should normalise to list form
+internally.</p></li>
+<li><p><strong>Unknown keys are ignored.</strong> Blocks, inline
+elements, and top-level keys that a consumer does not recognise should
+be silently skipped. This allows convention documents to extend the
+format without breaking basic renderers.</p></li>
+<li><p><strong>No presentation markup.</strong> JSONHTL does not define
+emphasis, bold, underline, font size, or colour. Content is semantic.
+Presentation is the renderer’s concern.</p></li>
+<li><p><strong>Convention documents over spec changes.</strong> New
+element types, metadata schemas, and structural conventions should be
+defined in convention documents stored within the system and linked from
+the root node — not by extending this spec.</p></li>
+</ol>
+<h2 id="root-node-convention">Root Node Convention</h2>
+<p>When JSONHTL documents are stored in a key-value system, the root
+node (typically the empty-string key <code>""</code>) serves as a
+bootstrap. It should:</p>
+<ul>
+<li>Use only base JSONHTL elements (as defined in this spec) so any
+consumer can read it without prior knowledge.</li>
+<li>Briefly describe the link/navigation model.</li>
+<li>Link to convention documents that define any extended keys, metadata
+schemas, or organisational structures used in this particular
+system.</li>
+</ul>
+<p>An LLM or tool encountering the system for the first time reads the
+root node, follows only the links it needs, and stops. This keeps
+context window usage minimal.</p>
+<h2 id="example-document">Example Document</h2>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;title&quot;</span><span class="fu">:</span> <span class="st">&quot;Project Overview&quot;</span><span class="fu">,</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;content&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;heading&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;level&quot;</span><span class="fu">:</span> <span class="dv">1</span><span class="fu">,</span> <span class="dt">&quot;text&quot;</span><span class="fu">:</span> <span class="st">&quot;gdata-server&quot;</span><span class="fu">}}</span><span class="ot">,</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;para&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;A FastAPI-based HTTP API for GDBM databases. See &quot;</span><span class="ot">,</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span><span class="dt">&quot;link&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;href&quot;</span><span class="fu">:</span> <span class="st">&quot;gdata-server/api&quot;</span><span class="fu">,</span> <span class="dt">&quot;text&quot;</span><span class="fu">:</span> <span class="st">&quot;API documentation&quot;</span><span class="fu">}}</span><span class="ot">,</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot; for endpoint details.&quot;</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;para&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Configuration is handled via &quot;</span><span class="ot">,</span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span><span class="dt">&quot;code&quot;</span><span class="fu">:</span> <span class="st">&quot;.gdata_server.yaml&quot;</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot; or environment variables.&quot;</span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;codeblock&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;lang&quot;</span><span class="fu">:</span> <span class="st">&quot;bash&quot;</span><span class="fu">,</span> <span class="dt">&quot;body&quot;</span><span class="fu">:</span> <span class="st">&quot;uvicorn gdata_server:app --host 127.0.0.1 --port 8020&quot;</span><span class="fu">}}</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<h2 id="example-root-node">Example Root Node</h2>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;title&quot;</span><span class="fu">:</span> <span class="st">&quot;Notes System&quot;</span><span class="fu">,</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;content&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;heading&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;level&quot;</span><span class="fu">:</span> <span class="dv">1</span><span class="fu">,</span> <span class="dt">&quot;text&quot;</span><span class="fu">:</span> <span class="st">&quot;Welcome&quot;</span><span class="fu">}}</span><span class="ot">,</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;para&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;This is a JSONHTL document store. Each node is a JSON document keyed by a plain string. Links between nodes use the &quot;</span><span class="ot">,</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span><span class="dt">&quot;code&quot;</span><span class="fu">:</span> <span class="st">&quot;link&quot;</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot; element with the key as the &quot;</span><span class="ot">,</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span><span class="dt">&quot;code&quot;</span><span class="fu">:</span> <span class="st">&quot;href&quot;</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot; value.&quot;</span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;heading&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;level&quot;</span><span class="fu">:</span> <span class="dv">2</span><span class="fu">,</span> <span class="dt">&quot;text&quot;</span><span class="fu">:</span> <span class="st">&quot;Conventions&quot;</span><span class="fu">}}</span><span class="ot">,</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;para&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;This system uses extended conventions documented here:&quot;</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;para&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span><span class="dt">&quot;link&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;href&quot;</span><span class="fu">:</span> <span class="st">&quot;conventions/metadata&quot;</span><span class="fu">,</span> <span class="dt">&quot;text&quot;</span><span class="fu">:</span> <span class="st">&quot;Metadata keys&quot;</span><span class="fu">}}</span><span class="ot">,</span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot; — describes &quot;</span><span class="ot">,</span></span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span><span class="dt">&quot;code&quot;</span><span class="fu">:</span> <span class="st">&quot;created&quot;</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;, &quot;</span><span class="ot">,</span></span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span><span class="dt">&quot;code&quot;</span><span class="fu">:</span> <span class="st">&quot;type&quot;</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;, &quot;</span><span class="ot">,</span></span>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span><span class="dt">&quot;code&quot;</span><span class="fu">:</span> <span class="st">&quot;tags&quot;</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot; and other node-level keys.&quot;</span></span>
+<span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb9-26"><a href="#cb9-26" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;para&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb9-27"><a href="#cb9-27" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span><span class="dt">&quot;link&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;href&quot;</span><span class="fu">:</span> <span class="st">&quot;conventions/hierarchy&quot;</span><span class="fu">,</span> <span class="dt">&quot;text&quot;</span><span class="fu">:</span> <span class="st">&quot;Hierarchy conventions&quot;</span><span class="fu">}}</span><span class="ot">,</span></span>
+<span id="cb9-28"><a href="#cb9-28" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot; — how nodes are organised and navigated.&quot;</span></span>
+<span id="cb9-29"><a href="#cb9-29" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb9-30"><a href="#cb9-30" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;para&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb9-31"><a href="#cb9-31" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span><span class="dt">&quot;link&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;href&quot;</span><span class="fu">:</span> <span class="st">&quot;conventions/runnable&quot;</span><span class="fu">,</span> <span class="dt">&quot;text&quot;</span><span class="fu">:</span> <span class="st">&quot;Runnable documents&quot;</span><span class="fu">}}</span><span class="ot">,</span></span>
+<span id="cb9-32"><a href="#cb9-32" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot; — extended codeblock keys for executable content.&quot;</span></span>
+<span id="cb9-33"><a href="#cb9-33" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span><span class="fu">}</span></span>
+<span id="cb9-34"><a href="#cb9-34" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
+<span id="cb9-35"><a href="#cb9-35" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>

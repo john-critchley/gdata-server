@@ -1,0 +1,215 @@
+#!/usr/bin/python
+import os
+import yaml
+import gdata
+import logging    
+import json
+import fastapi
+import urllib.parse
+
+logging.basicConfig(
+    level=os.getenv('LOG_LEVEL', 'INFO'),
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+def setup() -> dict:
+    """
+    Load configuration from environment and/or config file.
+    
+    Precedence:
+    1. GDATA_SERVER_CONFIG env var (path to YAML config file)
+    2. .gdata_server.yaml in current directory (if exists)
+    3. GDBM_PATH env var
+    4. Default: .gdbm in current directory
+    
+    Returns dict with at least {"gdbm_file": "..."}
+    No config file is required—all env vars is fine.
+    """
+    GDATA_SERVER_CONFIG_default='.gdata_server.yaml'
+    config_file = os.environ.get('GDATA_SERVER_CONFIG', GDATA_SERVER_CONFIG_default)
+    try:
+        with open(config_file) as f:
+            config = yaml.load(f, Loader=yaml.SafeLoader)
+    except FileNotFoundError:
+        config = {}
+    CONFIG_defaults={
+            'gdbm_file': '.gdbm',
+            'gdata_server_port' : 8020
+    }
+    for vr in CONFIG_defaults:
+        env_var_name=vr.upper()
+        if env_var_name in os.environ:
+            config[vr]=os.environ[env_var_name]
+    for vr,vval in CONFIG_defaults.items():
+        if vr not in config:
+            config[vr]=vval
+    if not isinstance(config['gdata_server_port'], int):
+        config['gdata_server_port']=int(config['gdata_server_port'])
+    
+    assert isinstance(config, dict)
+    return config
+config = setup()
+db = gdata.gdata(gdbm_file=config['gdbm_file'])
+
+
+def _decode_key(path: str) -> str:
+    return urllib.parse.unquote(path.strip('/'))
+
+
+def _list_keys() -> list[str]:
+    return sorted(list(db.keys()))
+
+def handle_errors(func):
+    def wrapper(path: str, body: dict):
+        try:
+            return func(path, body)
+        except fastapi.HTTPException:
+            raise
+        except KeyError:
+            key = _decode_key(path)
+            return {'error': f'key not found: {key}'}
+        except Exception as e:
+            return {'error': str(e)}
+    return wrapper
+@handle_errors
+def handle_GET_request(path: str, body: dict) -> dict:    
+    key = _decode_key(path)
+    if key not in db:
+        raise fastapi.HTTPException(status_code=404, detail=f"key not found: {key}")
+    return {'value': db[key]}    
+@handle_errors
+def handle_PUT_request(path: str, body: dict) -> dict:    
+    key = _decode_key(path)
+    db[key]=body.get('value')
+    return {'status': 'ok'}
+@handle_errors
+def handle_HEAD_request(path: str, body: dict) -> dict:
+    key = _decode_key(path)
+    return {'exists': key in db}
+@handle_errors
+def handle_DELETE_request(path: str, body: dict) -> dict:    
+    key = _decode_key(path)
+    if key not in db:
+        raise fastapi.HTTPException(status_code=404, detail=f"key not found: {key}")
+    del db[key]
+    return {'status': 'deleted'}
+
+
+@handle_errors
+def handle_POST_request(path: str, body: dict) -> dict:
+    """
+    POST accepts a JSON document describing the request.
+
+    Supported operations (via `op`):
+    - `keys`: list all keys
+    - `dump`: return all key/value pairs as one document
+    """
+    if not isinstance(body, dict):
+        return {'error': 'body must be a JSON object'}
+    op = body.get('op')
+    if op == 'keys':
+        return {'keys': _list_keys()}
+    if op == 'dump':
+        return {'items': {k: db[k] for k in _list_keys()}}
+    return {
+        'error': f'unknown op: {op!r}',
+        'supported_ops': ['keys', 'dump'],
+    }
+def handle_request(method: str, path: str, body) -> dict:
+    """
+    Handle a gdata request.
+    
+    Args:
+        method: HTTP verb (GET, POST, DELETE, HEAD)
+        path: URL path (e.g., "/get/mykey", "/keys", etc.)
+        body: Request body as dict (for POST)
+    
+    Returns:
+        dict with {"status": ..., "data": ...} or error
+    """
+
+    assert isinstance(method, str) and isinstance(path, str)
+    def unknown_handler(key, body)->dict:
+        return {} # Dummy for now    
+    logging.log(logging.INFO, f'Got {method} request')
+    dispatch = {
+        'GET': handle_GET_request,
+        'PUT': handle_PUT_request,
+        'DELETE': handle_DELETE_request,
+        'HEAD': handle_HEAD_request,
+        'POST': handle_POST_request,
+    }
+    func=dispatch.get(method, unknown_handler)
+    try:
+        rv=func(path,body)
+    except fastapi.HTTPException as e:
+        return {'error': str(getattr(e, 'detail', e))}
+    assert isinstance(rv, dict)
+    return rv    
+        
+    
+def read_request():
+    """Read HTTP-like request from stdin until '.' is entered"""
+    while True:
+        line = input().rstrip()
+        if line == '.':
+            break
+        yield line
+
+
+if __name__=="__main__":
+    logging.basicConfig(
+        level=os.getenv('LOG_LEVEL', 'INFO'),
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+    hdrs=[]
+    for l in read_request():
+        if l=="":
+            break
+        hdrs.append(l)
+    # Parse request line
+    method, path, *vers= hdrs.pop(0).split()
+    
+
+    
+    # Parse body as JSON if present
+    body_text='\n'.join(read_request())
+    if len(body_text):
+        try:
+            body = json.loads(body_text)
+        except json.JSONDecodeError:
+            logging.error(f"Failed to parse body as JSON:\n{body_text}")
+            body = {}
+    else:
+        body={}
+    
+    logging.info(f"Request: {method} {path}")
+    result = handle_request(method, path, body)
+    print(result)
+            
+app = fastapi.FastAPI()    
+
+@app.get("/{path:path}")
+def get_item(path: str):
+    return handle_GET_request(f"/{path}", {})
+
+@app.put("/{path:path}")
+def put_item(path: str, body: dict):
+    return handle_PUT_request(f"/{path}", body)
+
+@app.delete("/{path:path}")
+def delete_item(path: str):
+    return handle_DELETE_request(f"/{path}", {})
+
+
+@app.head("/{path:path}")
+def head_item(path: str):
+    rv = handle_HEAD_request(f"/{path}", {})
+    if isinstance(rv, dict) and 'error' in rv:
+        raise fastapi.HTTPException(status_code=500, detail=rv['error'])
+    exists = bool(rv.get('exists'))
+    return fastapi.Response(status_code=200 if exists else 404)
+
+
+@app.post("/")
+def post_op(body: dict):
+    return handle_POST_request("/", body)

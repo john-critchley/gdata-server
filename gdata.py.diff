@@ -1,0 +1,215 @@
+1a2
+> """gdata.py v 0.1.4 - John Critchley"""
+2a4
+> import errno
+4,5d5
+< import urllib.parse
+< import requests
+7c7,11
+< class gdata_local_raw:
+---
+> class GDataLockedError(gdbm.error):
+>     """Database is locked for writing."""
+>     pass
+> 
+> class gdata_raw:
+24c28,35
+<         self.db = gdbm.open(gdbm_file, mode, mask)
+---
+>         try:
+>             self.db = gdbm.open(gdbm_file, mode, mask)
+>         except gdbm.error as e:
+>             # errno.EAGAIN is the typical indicator that the database
+>             # file is currently locked by another writer.
+>             if getattr(e, 'errno', None) == errno.EAGAIN:
+>                 raise GDataLockedError(str(e)) from e
+>             raise
+101c112
+< class gdata_local_simple(gdata_local_raw):
+---
+> class gdata_simple(gdata_raw):
+103c114
+<     A subclass of gdata_local_raw for handling string data (UTF-8 encoded). 
+---
+>     A subclass of gdata_raw for handling string data (UTF-8 encoded). 
+131c142
+< class gdata_local(gdata_local_simple):
+---
+> class gdata(gdata_simple):
+133c144
+<     A subclass of gdata_local_simple that stores and retrieves data as JSON.
+---
+>     A subclass of gdata_simple that stores and retrieves data as JSON.
+144,315d154
+< 
+< 
+< class gdata_http_simple:
+<     """
+<     HTTP client for gdata-server - similar interface to gdata_local_simple.
+<     Works with JSON strings over HTTP.
+<     
+<     Args:
+<         url (str): Base URL of the gdata-server (e.g., 'http://localhost:8020')
+<     """
+<     
+<     def __init__(self, url):
+<         self.url = url.rstrip('/')
+<         self.open = True
+<     
+<     def __enter__(self):
+<         """Supports using the class as a context manager (with statement)."""
+<         return self
+<     
+<     def __exit__(self, *blah):
+<         """Closes the connection when exiting a context manager block."""
+<         self.close()
+<         return False
+<     
+<     def close(self):
+<         """Closes the connection."""
+<         self.open = False
+<     
+<     def __getitem__(self, key):
+<         """Retrieve a JSON string via HTTP GET, raises KeyError if not found."""
+<         quoted_key = urllib.parse.quote(key, safe='')
+<         response = requests.get(f"{self.url}/{quoted_key}")
+<         if response.status_code == 404:
+<             raise KeyError(key)
+<         response.raise_for_status()
+<         # Server returns raw JSON string as response body
+<         return response.text
+<     
+<     def __setitem__(self, key, json_string):
+<         """Store a JSON string via HTTP PUT."""
+<         quoted_key = urllib.parse.quote(key, safe='')
+<         response = requests.put(
+<             f"{self.url}/{quoted_key}",
+<             data=json_string,
+<             headers={'Content-Type': 'application/json'}
+<         )
+<         response.raise_for_status()
+<     
+<     def __delitem__(self, key):
+<         """Delete a key via HTTP DELETE."""
+<         quoted_key = urllib.parse.quote(key, safe='')
+<         response = requests.delete(f"{self.url}/{quoted_key}")
+<         if response.status_code == 404:
+<             raise KeyError(key)
+<         response.raise_for_status()
+<     
+<     def __contains__(self, key):
+<         """Check if a key exists via HTTP HEAD."""
+<         quoted_key = urllib.parse.quote(key, safe='')
+<         response = requests.head(f"{self.url}/{quoted_key}")
+<         return response.status_code == 200
+<     
+<     def get(self, key, default=None):
+<         """
+<         Get the value for a key. If the key doesn't exist, return the default value.
+<         """
+<         return self[key] if key in self else default
+<     
+<     def keys(self):
+<         """
+<         Return a sorted list of all keys via POST with {"op": "keys"}.
+<         """
+<         response = requests.post(
+<             f"{self.url}/",
+<             json={"op": "keys"}
+<         )
+<         response.raise_for_status()
+<         return response.json()['keys']
+<     
+<     def items(self):
+<         """
+<         Return a list of (key, value) tuples via POST with {"op": "dump"}.
+<         """
+<         response = requests.post(
+<             f"{self.url}/",
+<             json={"op": "dump"}
+<         )
+<         response.raise_for_status()
+<         items_dict = response.json()['items']
+<         return [(k, v) for k, v in items_dict.items()]
+<     
+<     def __iter__(self):
+<         """Iterate over keys."""
+<         return iter(self.keys())
+<     
+<     def __len__(self):
+<         """Return the number of items."""
+<         return len(self.keys())
+<     
+<     def flush(self):
+<         """Flush database to disk on server."""
+<         response = requests.post(
+<             f"{self.url}/",
+<             json={"op": "flush"}
+<         )
+<         response.raise_for_status()
+<         return response.json()
+<     
+<     def stop(self):
+<         """Stop the server."""
+<         response = requests.post(
+<             f"{self.url}/",
+<             json={"op": "stop"}
+<         )
+<         response.raise_for_status()
+<         return response.json()
+< 
+< 
+< class gdata_http(gdata_http_simple):
+<     """
+<     Rich HTTP client - same interface as gdata_local.
+<     Handles Python objects via JSON serialization.
+<     """
+<     
+<     def __setitem__(self, key, item):
+<         """Serialize Python object to JSON string, then store via HTTP."""
+<         json_string = json.dumps(item)
+<         super().__setitem__(key, json_string)
+<     
+<     def __getitem__(self, key):
+<         """Get JSON string via HTTP, deserialize to Python object."""
+<         json_string = super().__getitem__(key)
+<         return json.loads(json_string)
+< 
+< 
+< def gdata(gdbm_file=None, url=None, mode='c', mask=0o600):
+<     """
+<     Factory function to create appropriate gdata instance.
+<     
+<     Args:
+<         gdbm_file (str): Path to local GDBM file (for local access)
+<         url (str): URL of gdata-server (for remote access)
+<         mode (str): File mode for local GDBM (default 'c')
+<         mask (int): File permissions mask for local GDBM (default 0o600)
+<     
+<     Returns:
+<         gdata_local instance if gdbm_file specified, gdata_http instance if url specified
+<     
+<     Examples:
+<         # Local access
+<         with gdata(gdbm_file='/path/to/file.gdbm') as db:
+<             db['key'] = {'data': 'value'}
+<         
+<         # Remote access
+<         with gdata(url='http://localhost:8020') as db:
+<             db['key'] = {'data': 'value'}
+<     """
+<     if gdbm_file is not None and url is not None:
+<         raise ValueError("Specify either gdbm_file or url, not both")
+<     
+<     if gdbm_file is not None:
+<         return gdata_local(gdbm_file=gdbm_file, mode=mode, mask=mask)
+<     elif url is not None:
+<         return gdata_http(url=url)
+<     else:
+<         # Default to local with default filename
+<         return gdata_local(gdbm_file='.gdbm', mode=mode, mask=mask)
+< 
+< 
+< # Backward compatibility aliases
+< gdata_raw = gdata_local_raw
+< gdata_simple = gdata_local_simple
