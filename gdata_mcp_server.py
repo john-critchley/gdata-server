@@ -31,6 +31,7 @@ from mcp.server.sse import SseServerTransport
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gdata
+import gdata_oauth
 
 logging.basicConfig(
     level=os.getenv('LOG_LEVEL', 'INFO'),
@@ -103,6 +104,7 @@ async def db_flush(db_path: str):
 
 def make_rest_app(db_path: str) -> fastapi.FastAPI:
     app = fastapi.FastAPI()
+    app.include_router(gdata_oauth.router)
 
     def _key(path: str) -> str:
         return urllib.parse.unquote(path.strip('/'))
@@ -253,10 +255,11 @@ def make_mcp_app(db_path: str) -> Starlette:
                 mcp_server.create_initialization_options()
             )
 
-    return Starlette(routes=[
+    app = Starlette(routes=[
         Route("/mcp/", endpoint=handle_sse),
         Mount("/mcp/messages", app=sse.handle_post_message),
     ])
+    return gdata_oauth.BearerMiddleware(app)
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +267,7 @@ def make_mcp_app(db_path: str) -> Starlette:
 # ---------------------------------------------------------------------------
 
 async def main():
+    gdata_oauth.startup_check()
     parser = argparse.ArgumentParser(description="gdata REST + MCP server")
     parser.add_argument("--rest-port", type=int, default=int(os.getenv("GDATA_SERVER_PORT", 8020)))
     parser.add_argument("--mcp-port",  type=int, default=int(os.getenv("GDATA_MCP_PORT",    8022)))
