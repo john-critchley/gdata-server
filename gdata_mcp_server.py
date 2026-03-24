@@ -231,7 +231,14 @@ def make_mcp_app(db_path: str) -> Starlette:
                         result = raw
             elif name == "put":
                 key = arguments["key"]
-                await db_put(db_path, key, json.dumps(arguments["value"]))
+                value = arguments["value"]
+                # claude.ai MCP client serialises object values to strings; unwrap if needed
+                if isinstance(value, str):
+                    try:
+                        value = json.loads(value)
+                    except json.JSONDecodeError:
+                        pass
+                await db_put(db_path, key, json.dumps(value))
                 result = {"status": "ok"}
             elif name == "delete":
                 key = arguments["key"]
