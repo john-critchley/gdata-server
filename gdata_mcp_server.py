@@ -4,7 +4,11 @@ gdata_mcp_server.py — combined REST + MCP server over gdbm.
 
 Runs two uvicorn servers in one process (shared db, no locking conflicts):
   - REST API on --rest-port (default 8020)  — same interface as gdata_server.py
-  - MCP  SSE on --mcp-port  (default 8022)
+  - MCP      on --mcp-port  (default 8022)  — SSE and/or Streamable HTTP
+
+Transport flags (env vars, default both enabled):
+  MCP_SSE=true|false          enable SSE transport  (GET /mcp/ + POST /mcp/messages)
+  MCP_STREAMABLE=true|false   enable Streamable HTTP (POST /mcp/)
 
 All db access is serialised via a single asyncio.Lock.
 """
@@ -25,9 +29,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
+import contextlib
 import mcp.types as types
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gdata
@@ -164,12 +170,26 @@ def make_rest_app(db_path: str) -> fastapi.FastAPI:
 
 
 # ---------------------------------------------------------------------------
-# MCP app (SSE)
+# MCP app (SSE and/or Streamable HTTP, controlled by env vars)
 # ---------------------------------------------------------------------------
 
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.getenv(name, '').lower()
+    if val in ('1', 'true', 'yes'):
+        return True
+    if val in ('0', 'false', 'no'):
+        return False
+    return default
+
+
 def make_mcp_app(db_path: str) -> Starlette:
+    enable_sse        = _env_bool('MCP_SSE',        True)
+    enable_streamable = _env_bool('MCP_STREAMABLE', True)
+
+    if not enable_sse and not enable_streamable:
+        raise RuntimeError("At least one of MCP_SSE or MCP_STREAMABLE must be enabled")
+
     mcp_server = Server("gdata")
-    sse = SseServerTransport("/mcp/messages")  # where clients POST replies
 
     @mcp_server.list_tools()
     async def list_tools() -> list[types.Tool]:
@@ -255,17 +275,43 @@ def make_mcp_app(db_path: str) -> Starlette:
 
         return [types.TextContent(type="text", text=json.dumps(result))]
 
-    async def handle_sse(request: Request):
-        async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
-            await mcp_server.run(
-                streams[0], streams[1],
-                mcp_server.create_initialization_options()
-            )
+    routes = []
 
-    app = Starlette(routes=[
-        Route("/mcp/", endpoint=handle_sse),
-        Mount("/mcp/messages", app=sse.handle_post_message),
-    ])
+    if enable_sse:
+        sse = SseServerTransport("/mcp/messages")
+
+        async def handle_sse(request: Request):
+            async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
+                await mcp_server.run(
+                    streams[0], streams[1],
+                    mcp_server.create_initialization_options()
+                )
+
+        routes += [
+            Route("/mcp/", endpoint=handle_sse, methods=["GET"]),
+            Mount("/mcp/messages", app=sse.handle_post_message),
+        ]
+
+    if enable_streamable:
+        session_manager = StreamableHTTPSessionManager(mcp_server, stateless=True)
+
+        @contextlib.asynccontextmanager
+        async def streamable_lifespan(app):
+            async with session_manager.run():
+                yield
+
+        routes.append(Mount("/mcp", app=session_manager.handle_request))
+
+    transports = []
+    if enable_sse:        transports.append("SSE")
+    if enable_streamable: transports.append("Streamable HTTP")
+    logging.info(f"MCP transports enabled: {', '.join(transports)}")
+
+    if enable_streamable:
+        app = Starlette(routes=routes, lifespan=streamable_lifespan)
+    else:
+        app = Starlette(routes=routes)
+
     return gdata_oauth.BearerMiddleware(app)
 
 
@@ -290,7 +336,7 @@ async def main():
     rest_cfg = uvicorn.Config(rest_app, host=args.host, port=args.rest_port, log_level=log_level)
     mcp_cfg  = uvicorn.Config(mcp_app,  host=args.host, port=args.mcp_port,  log_level=log_level)
 
-    logging.info(f"REST on {args.host}:{args.rest_port}  |  MCP SSE on {args.host}:{args.mcp_port}  |  db={args.db}")
+    logging.info(f"REST on {args.host}:{args.rest_port}  |  MCP on {args.host}:{args.mcp_port}  |  db={args.db}")
 
     await asyncio.gather(
         uvicorn.Server(rest_cfg).serve(),
