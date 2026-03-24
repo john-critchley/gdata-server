@@ -104,6 +104,86 @@ async def db_flush(db_path: str):
         _open_db(db_path).db.sync()
 
 
+async def db_patch(db_path: str, key: str, body: dict) -> dict:
+    """
+    Atomic read-modify-write for block-level patch operations.
+    Returns a result dict; raises fastapi.HTTPException on error.
+    """
+    async with _db_lock:
+        db = _open_db(db_path)
+
+        if key not in db:
+            raise fastapi.HTTPException(status_code=404, detail=f"key not found: {key}")
+
+        try:
+            doc = json.loads(db[key])
+        except json.JSONDecodeError:
+            raise fastapi.HTTPException(status_code=400, detail="document is not valid JSON")
+
+        if not isinstance(doc, dict):
+            raise fastapi.HTTPException(status_code=400, detail="document is not a JSON object")
+
+        op = body.get('op')
+
+        if op == 'patch_meta':
+            fields = body.get('fields')
+            if not isinstance(fields, dict):
+                raise fastapi.HTTPException(status_code=400, detail="'fields' must be an object")
+            if 'content' in fields:
+                raise fastapi.HTTPException(status_code=400, detail="'content' cannot be updated via patch_meta")
+            doc.update(fields)
+            db[key] = json.dumps(doc)
+            return {'status': 'ok'}
+
+        content = doc.get('content')
+        if content is None:
+            raise fastapi.HTTPException(status_code=409, detail="document has no 'content' key")
+        if not isinstance(content, list):
+            raise fastapi.HTTPException(
+                status_code=400,
+                detail="'content' is not a list; cannot patch block-level (PUT the full document first)"
+            )
+
+        if op == 'append_block':
+            block = body.get('block')
+            if block is None:
+                raise fastapi.HTTPException(status_code=400, detail="'block' is required for append_block")
+            content.append(block)
+            db[key] = json.dumps(doc)
+            return {'status': 'ok'}
+
+        if op in ('insert_block', 'replace_block', 'delete_block'):
+            index = body.get('index')
+            if index is None:
+                raise fastapi.HTTPException(status_code=400, detail=f"'index' is required for {op}")
+            if not isinstance(index, int) or index < 0:
+                raise fastapi.HTTPException(status_code=400, detail="'index' must be a non-negative integer")
+            max_index = len(content) if op == 'insert_block' else len(content) - 1
+            if index > max_index:
+                raise fastapi.HTTPException(
+                    status_code=400,
+                    detail=f"index {index} out of range (content has {len(content)} block(s))"
+                )
+            if op == 'delete_block':
+                content.pop(index)
+                db[key] = json.dumps(doc)
+                return {'status': 'ok'}
+            block = body.get('block')
+            if block is None:
+                raise fastapi.HTTPException(status_code=400, detail=f"'block' is required for {op}")
+            if op == 'insert_block':
+                content.insert(index, block)
+            else:
+                content[index] = block
+            db[key] = json.dumps(doc)
+            return {'status': 'ok'}
+
+        raise fastapi.HTTPException(
+            status_code=400,
+            detail=f"unknown op: {op!r}. Supported: append_block, insert_block, replace_block, delete_block, patch_meta"
+        )
+
+
 # ---------------------------------------------------------------------------
 # REST app (FastAPI) — same interface as gdata_server.py
 # ---------------------------------------------------------------------------
@@ -165,6 +245,11 @@ def make_rest_app(db_path: str) -> fastapi.FastAPI:
             'error': f'unknown op: {op!r}',
             'supported_ops': ['keys', 'dump', 'flush', 'stop'],
         }
+
+    @app.post("/{path:path}")
+    async def post_patch(path: str, body: dict):
+        key = _key(path)
+        return await db_patch(db_path, key, body)
 
     return app
 
@@ -234,6 +319,38 @@ def _make_tool_server(db_path: str) -> Server:
                 description="Return all key/value pairs.",
                 inputSchema={"type": "object", "properties": {}},
             ),
+            types.Tool(
+                name="patch",
+                description=(
+                    "Apply a block-level patch operation to a JSONHTL note. "
+                    "Prefer this over put() for targeted edits to avoid rewriting the full document. "
+                    "ops: append_block, insert_block, replace_block, delete_block, patch_meta."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string", "description": "Note key"},
+                        "op": {
+                            "type": "string",
+                            "enum": ["append_block", "insert_block", "replace_block", "delete_block", "patch_meta"],
+                            "description": "Operation to perform",
+                        },
+                        "block": {
+                            "type": "object",
+                            "description": "JSONHTL block — required for append_block, insert_block, replace_block",
+                        },
+                        "index": {
+                            "type": "integer",
+                            "description": "0-based block index — required for insert_block, replace_block, delete_block",
+                        },
+                        "fields": {
+                            "type": "object",
+                            "description": "Metadata fields to update — required for patch_meta (title, version, updated, tags; not content)",
+                        },
+                    },
+                    "required": ["key", "op"],
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -268,6 +385,13 @@ def _make_tool_server(db_path: str) -> Server:
                 result = {"keys": await db_keys(db_path)}
             elif name == "dump":
                 result = {"items": await db_dump(db_path)}
+            elif name == "patch":
+                key = arguments["key"]
+                body = {k: arguments[k] for k in ("op", "block", "index", "fields") if k in arguments}
+                try:
+                    result = await db_patch(db_path, key, body)
+                except fastapi.HTTPException as e:
+                    result = {"error": e.detail, "status_code": e.status_code}
             else:
                 result = {"error": f"unknown tool: {name}"}
         except Exception as e:

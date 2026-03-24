@@ -1,13 +1,16 @@
 #!/usr/bin/python
 import os
 import sys
+import threading
 import yaml
-import logging    
+import logging
 import json
 import fastapi
 import urllib.parse
 import uvicorn
 from fastapi.responses import Response
+
+_patch_lock = threading.Lock()
 
 # Force import of gdata from current directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -110,6 +113,89 @@ def handle_DELETE_request(path: str, body: dict) -> dict:
         raise fastapi.HTTPException(status_code=404, detail=f"key not found: {key}")
     del db[key]
     return {'status': 'deleted'}
+
+
+def handle_PATCH_DOC_request(path: str, body: dict) -> dict:
+    """
+    POST /{key} — block-level patch operations on a JSONHTL document.
+
+    Supported ops: append_block, insert_block, replace_block, delete_block, patch_meta.
+    Read-modify-write is atomic under _patch_lock.
+    """
+    key = _decode_key(path)
+    db = get_db()
+
+    with _patch_lock:
+        if key not in db:
+            raise fastapi.HTTPException(status_code=404, detail=f"key not found: {key}")
+
+        try:
+            doc = json.loads(db[key])
+        except json.JSONDecodeError:
+            raise fastapi.HTTPException(status_code=400, detail="document is not valid JSON")
+
+        if not isinstance(doc, dict):
+            raise fastapi.HTTPException(status_code=400, detail="document is not a JSON object")
+
+        op = body.get('op')
+
+        if op == 'patch_meta':
+            fields = body.get('fields')
+            if not isinstance(fields, dict):
+                raise fastapi.HTTPException(status_code=400, detail="'fields' must be an object")
+            if 'content' in fields:
+                raise fastapi.HTTPException(status_code=400, detail="'content' cannot be updated via patch_meta")
+            doc.update(fields)
+            db[key] = json.dumps(doc)
+            return {'status': 'ok'}
+
+        content = doc.get('content')
+        if content is None:
+            raise fastapi.HTTPException(status_code=409, detail="document has no 'content' key")
+        if not isinstance(content, list):
+            raise fastapi.HTTPException(
+                status_code=400,
+                detail="'content' is not a list; cannot patch block-level (PUT the full document first)"
+            )
+
+        if op == 'append_block':
+            block = body.get('block')
+            if block is None:
+                raise fastapi.HTTPException(status_code=400, detail="'block' is required for append_block")
+            content.append(block)
+            db[key] = json.dumps(doc)
+            return {'status': 'ok'}
+
+        if op in ('insert_block', 'replace_block', 'delete_block'):
+            index = body.get('index')
+            if index is None:
+                raise fastapi.HTTPException(status_code=400, detail=f"'index' is required for {op}")
+            if not isinstance(index, int) or index < 0:
+                raise fastapi.HTTPException(status_code=400, detail="'index' must be a non-negative integer")
+            max_index = len(content) if op == 'insert_block' else len(content) - 1
+            if index > max_index:
+                raise fastapi.HTTPException(
+                    status_code=400,
+                    detail=f"index {index} out of range (content has {len(content)} block(s))"
+                )
+            if op == 'delete_block':
+                content.pop(index)
+                db[key] = json.dumps(doc)
+                return {'status': 'ok'}
+            block = body.get('block')
+            if block is None:
+                raise fastapi.HTTPException(status_code=400, detail=f"'block' is required for {op}")
+            if op == 'insert_block':
+                content.insert(index, block)
+            else:
+                content[index] = block
+            db[key] = json.dumps(doc)
+            return {'status': 'ok'}
+
+        raise fastapi.HTTPException(
+            status_code=400,
+            detail=f"unknown op: {op!r}. Supported: append_block, insert_block, replace_block, delete_block, patch_meta"
+        )
 
 
 def handle_POST_request(path: str, body: dict) -> dict:
@@ -298,3 +384,8 @@ def head_item(path: str):
 @app.post("/")
 def post_op(body: dict):
     return handle_POST_request("/", body)
+
+
+@app.post("/{path:path}")
+def post_patch(path: str, body: dict):
+    return handle_PATCH_DOC_request(f"/{path}", body)

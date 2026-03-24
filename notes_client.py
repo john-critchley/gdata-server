@@ -34,17 +34,14 @@ def write_doc(key, content):
         # If it fails, wrap it in a simple document structure
         if isinstance(content, str):
             try:
-                # Try to parse as JSON first
                 parsed_content = json.loads(content)
-            except json.JSONDecodeError:
-                # If not JSON, create a simple document
-                parsed_content = {
-                    "content": content,
-                    "type": "text",
-                    "created": "2026-02-05"
-                }
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"Note value for '{key}' is not valid JSON: {e}. "
+                    "Pass a dict directly or fix the JSON string before calling write_doc."
+                ) from e
         else:
-            # Content is already structured
+            # Content is already a dict/list — store directly
             parsed_content = content
         
         if key == "":
@@ -91,21 +88,117 @@ def delete_doc(key):
     except requests.exceptions.RequestException as e:
         return f"Error deleting document: {e}"
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage:")
-        print("  python notes_client.py read [key]")
-        print("  python notes_client.py write <key> <content>")
-        print("  python notes_client.py write-stdin <key>  # read content from stdin")
-        print("  python notes_client.py list")
-        print("  python notes_client.py delete <key>")
+def patch_doc(key, op, block=None, index=None, fields=None):
+    """Apply a block-level patch operation to a document.
+
+    ops: append_block, insert_block, replace_block, delete_block, patch_meta
+
+    Returns the server response dict, or a dict with 'error' on failure.
+    """
+    body = {'op': op}
+    if block is not None:
+        body['block'] = block
+    if index is not None:
+        body['index'] = index
+    if fields is not None:
+        body['fields'] = fields
+    try:
+        response = requests.post(f"{NOTES_URL}/{key}", json=body)
+        if not response.ok:
+            try:
+                detail = response.json()
+            except Exception:
+                detail = response.text
+            return {'error': detail, 'status_code': response.status_code}
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        return {'error': str(e)}
+
+
+def load_doc(key, filepath, delete_after=False):
+    """Load a JSON file into a document.
+    
+    Args:
+        key: Document key to store under
+        filepath: Path to JSON file to load
+        delete_after: If True, delete the file after successful load
+    
+    Returns:
+        Success/error message string.
+        On error, raises SystemExit(1) for CLI use.
+    """
+    # Read and validate the file
+    try:
+        with open(filepath, 'r') as f:
+            content = f.read()
+    except FileNotFoundError:
+        print(f"Error: file not found: {filepath}", file=sys.stderr)
         sys.exit(1)
+    except IOError as e:
+        print(f"Error reading file: {e}", file=sys.stderr)
+        sys.exit(1)
+    
+    # Validate JSON
+    try:
+        json.loads(content)
+    except json.JSONDecodeError as e:
+        print(f"Error: invalid JSON in {filepath}: {e}", file=sys.stderr)
+        sys.exit(1)
+    
+    # Write to server
+    result = write_doc(key, content)
+    if 'Error' in result:
+        print(result, file=sys.stderr)
+        sys.exit(1)
+    
+    # Delete file if requested
+    if delete_after:
+        os.unlink(filepath)
+    
+    return result
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2 or sys.argv[1] in ('--help', '-h'):
+        prog = os.path.basename(sys.argv[0])
+        print(f"Usage: {prog} <command> [options] [args...]")
+        print()
+        print("Commands:")
+        print(f"  {prog} load [-d] <key> <file>")
+        print(f"        Load a JSON file into a document.")
+        print(f"        -d   Delete the file after it has been safely loaded.")
+        print()
+        print(f"  {prog} patch <key> append_block <block_json>")
+        print(f"  {prog} patch <key> insert_block <index> <block_json>")
+        print(f"  {prog} patch <key> replace_block <index> <block_json>")
+        print(f"  {prog} patch <key> delete_block <index>")
+        print(f"  {prog} patch <key> patch_meta <fields_json>")
+        print(f"        Apply a block-level patch to a document.")
+        print()
+        print(f"  {prog} read [key]              Read a document (default: root)")
+        print(f"  {prog} write <key> <content>   Write content to a document")
+        print(f"  {prog} write-stdin <key>        Write content from stdin")
+        print(f"  {prog} list                     List all document keys")
+        print(f"  {prog} delete <key>             Delete a document")
+        print()
+        print("Examples:")
+        print(f"  {prog} load myconfig config.json")
+        print(f"  {prog} patch mytodo append_block '{{\"para\": [\"New item.\"]}}'")
+        print(f"  {prog} patch mytodo delete_block 3")
+        print(f"  {prog} patch mytodo patch_meta '{{\"version\": 5, \"updated\": \"2026-03-24\"}}'")
+        print()
+        print("Environment:")
+        print(f"  NOTES_URL   Server URL (default: {NOTES_URL})")
+        sys.exit(0 if '--help' in sys.argv or '-h' in sys.argv else 1)
     
     command = sys.argv[1]
     
     if command == "read":
         key = sys.argv[2] if len(sys.argv) > 2 else ""
-        print(read_doc(key))
+        result = read_doc(key)
+        if isinstance(result, (dict, list)):
+            print(json.dumps(result, indent=2))
+        else:
+            print(result)
     elif command == "write":
         if len(sys.argv) < 4:
             print("Usage: python notes_client.py write <key> <content>")
@@ -120,6 +213,21 @@ if __name__ == "__main__":
         key = sys.argv[2]
         content = sys.stdin.read()
         print(write_doc(key, content))
+    elif command == "load":
+        args = sys.argv[2:]
+        delete_after = False
+        if args and args[0] == '-d':
+            delete_after = True
+            args = args[1:]
+        if len(args) < 2:
+            prog = os.path.basename(sys.argv[0])
+            print(f"Usage: {prog} load [-d] <key> <file>")
+            print()
+            print("Load a JSON file into a document.")
+            print("  -d   Delete the file after it has been safely loaded.")
+            sys.exit(1)
+        key, filepath = args[0], args[1]
+        print(load_doc(key, filepath, delete_after=delete_after))
     elif command == "list":
         keys = list_docs()
         if isinstance(keys, list):
@@ -129,6 +237,48 @@ if __name__ == "__main__":
                 print(f"  {display_key}")
         else:
             print(keys)
+    elif command == "patch":
+        if len(sys.argv) < 4:
+            prog = os.path.basename(sys.argv[0])
+            print(f"Usage: {prog} patch <key> <op> [args...]")
+            sys.exit(1)
+        key = sys.argv[2]
+        op = sys.argv[3]
+        rest = sys.argv[4:]
+        kwargs = {}
+        try:
+            if op == 'append_block':
+                if not rest:
+                    print("Error: append_block requires <block_json>", file=sys.stderr)
+                    sys.exit(1)
+                kwargs['block'] = json.loads(rest[0])
+            elif op in ('insert_block', 'replace_block'):
+                if len(rest) < 2:
+                    print(f"Error: {op} requires <index> <block_json>", file=sys.stderr)
+                    sys.exit(1)
+                kwargs['index'] = int(rest[0])
+                kwargs['block'] = json.loads(rest[1])
+            elif op == 'delete_block':
+                if not rest:
+                    print("Error: delete_block requires <index>", file=sys.stderr)
+                    sys.exit(1)
+                kwargs['index'] = int(rest[0])
+            elif op == 'patch_meta':
+                if not rest:
+                    print("Error: patch_meta requires <fields_json>", file=sys.stderr)
+                    sys.exit(1)
+                kwargs['fields'] = json.loads(rest[0])
+            else:
+                print(f"Error: unknown op '{op}'", file=sys.stderr)
+                sys.exit(1)
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"Error parsing arguments: {e}", file=sys.stderr)
+            sys.exit(1)
+        result = patch_doc(key, op, **kwargs)
+        if isinstance(result, dict) and 'error' in result:
+            print(json.dumps(result), file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(result))
     elif command == "delete":
         if len(sys.argv) < 3:
             print("Usage: python notes_client.py delete <key>")
