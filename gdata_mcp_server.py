@@ -182,16 +182,16 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
-def make_mcp_app(db_path: str) -> Starlette:
-    enable_sse        = _env_bool('MCP_SSE',        True)
-    enable_streamable = _env_bool('MCP_STREAMABLE', True)
+def _make_tool_server(db_path: str) -> Server:
+    """Create and return a Server instance with all gdata tools registered.
 
-    if not enable_sse and not enable_streamable:
-        raise RuntimeError("At least one of MCP_SSE or MCP_STREAMABLE must be enabled")
+    Called once per transport so each transport has its own Server instance
+    with independent session state — they must not be shared.
+    Both instances operate on the same database via the shared db_* functions.
+    """
+    server = Server("gdata")
 
-    mcp_server = Server("gdata")
-
-    @mcp_server.list_tools()
+    @server.list_tools()
     async def list_tools() -> list[types.Tool]:
         return [
             types.Tool(
@@ -236,7 +236,7 @@ def make_mcp_app(db_path: str) -> Starlette:
             ),
         ]
 
-    @mcp_server.call_tool()
+    @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[types.ContentBlock]:
         try:
             if name == "get":
@@ -275,17 +275,30 @@ def make_mcp_app(db_path: str) -> Starlette:
 
         return [types.TextContent(type="text", text=json.dumps(result))]
 
+    return server
+
+
+def make_mcp_app(db_path: str) -> Starlette:
+    enable_sse        = _env_bool('MCP_SSE',        True)
+    enable_streamable = _env_bool('MCP_STREAMABLE', True)
+
+    if not enable_sse and not enable_streamable:
+        raise RuntimeError("At least one of MCP_SSE or MCP_STREAMABLE must be enabled")
+
     routes = []
 
     if enable_sse:
-        sse = SseServerTransport("/mcp/messages")
+        sse_server = _make_tool_server(db_path)
+        sse = SseServerTransport("/mcp/messages/")
 
         async def handle_sse(request: Request):
             async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
-                await mcp_server.run(
+                await sse_server.run(
                     streams[0], streams[1],
-                    mcp_server.create_initialization_options()
+                    sse_server.create_initialization_options()
                 )
+            from starlette.responses import Response as StarletteResponse
+            return StarletteResponse()
 
         routes += [
             Route("/mcp/", endpoint=handle_sse, methods=["GET"]),
@@ -293,7 +306,8 @@ def make_mcp_app(db_path: str) -> Starlette:
         ]
 
     if enable_streamable:
-        session_manager = StreamableHTTPSessionManager(mcp_server, stateless=True)
+        streamable_server = _make_tool_server(db_path)
+        session_manager = StreamableHTTPSessionManager(streamable_server, stateless=True)
 
         @contextlib.asynccontextmanager
         async def streamable_lifespan(app):
