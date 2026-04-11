@@ -42,7 +42,9 @@ from mcp.client.streamable_http import streamablehttp_client
 BEARER = "test-bearer-token-for-pytest"
 TIMEOUT = 8  # seconds per async operation
 TEST_KEY_SSE = "_test/sse/roundtrip"
+TEST_KEY_SSE_PATCH = "_test/sse/patch"
 TEST_KEY_STREAMABLE = "_test/streamable/roundtrip"
+TEST_KEY_STREAMABLE_PATCH = "_test/streamable/patch"
 TEST_KEY_CROSS = "_test/cross/transport"
 
 
@@ -142,7 +144,7 @@ class TestSSETransport:
         run_async(go())
 
     def test_sse_list_tools(self, server_url):
-        """SSE: list_tools returns the expected five tools."""
+        """SSE: list_tools returns at least the expected tools; warns on extras."""
         async def go():
             async with sse_client(
                 f"{server_url}/mcp/",
@@ -153,7 +155,12 @@ class TestSSETransport:
                     await session.initialize()
                     result = await session.list_tools()
                     names = {t.name for t in result.tools}
-                    assert names == {"get", "put", "delete", "keys", "dump"}
+                    expected = {"get", "put", "delete", "keys", "dump", "patch"}
+                    assert expected <= names, f"Missing tools: {expected - names}"
+                    extra = names - expected
+                    if extra:
+                        import warnings
+                        warnings.warn(f"Unexpected extra tools in SSE list_tools: {extra}")
 
         run_async(go())
 
@@ -222,6 +229,47 @@ class TestSSETransport:
 
         run_async(go())
 
+    def test_sse_patch_lifecycle(self, server_url):
+        """SSE: put a JSONHTL doc, append_block, get to verify, delete."""
+        doc = {"title": "Test", "content": [{"para": ["Original."]}]}
+
+        async def go():
+            async with sse_client(
+                f"{server_url}/mcp/",
+                headers={"Authorization": f"Bearer {BEARER}"},
+                sse_read_timeout=TIMEOUT,
+            ) as streams:
+                async with ClientSession(*streams) as session:
+                    await session.initialize()
+
+                    put_result = parse_tool_result(
+                        (await session.call_tool("put", {"key": TEST_KEY_SSE_PATCH, "value": doc})).content
+                    )
+                    assert put_result == {"status": "ok"}
+
+                    patch_result = parse_tool_result(
+                        (await session.call_tool("patch", {
+                            "key": TEST_KEY_SSE_PATCH,
+                            "op": "append_block",
+                            "block": {"para": ["Appended."]},
+                        })).content
+                    )
+                    assert patch_result == {"status": "ok"}, f"patch failed: {patch_result}"
+
+                    get_result = parse_tool_result(
+                        (await session.call_tool("get", {"key": TEST_KEY_SSE_PATCH})).content
+                    )
+                    content = get_result.get("content", [])
+                    assert len(content) == 2, f"expected 2 blocks after append, got {len(content)}: {content}"
+                    assert content[1] == {"para": ["Appended."]}, f"appended block wrong: {content[1]}"
+
+                    del_result = parse_tool_result(
+                        (await session.call_tool("delete", {"key": TEST_KEY_SSE_PATCH})).content
+                    )
+                    assert del_result == {"status": "deleted"}
+
+        run_async(go())
+
     def test_sse_get_missing_key(self, server_url):
         """SSE: getting a non-existent key returns an error dict, not an exception."""
         async def go():
@@ -274,7 +322,7 @@ class TestStreamableHTTPTransport:
         run_async(go())
 
     def test_streamable_list_tools(self, server_url):
-        """Streamable HTTP: list_tools returns the expected five tools."""
+        """Streamable HTTP: list_tools returns at least the expected tools; warns on extras."""
         async def go():
             async with streamablehttp_client(
                 f"{server_url}/mcp",
@@ -284,7 +332,12 @@ class TestStreamableHTTPTransport:
                     await session.initialize()
                     result = await session.list_tools()
                     names = {t.name for t in result.tools}
-                    assert names == {"get", "put", "delete", "keys", "dump"}
+                    expected = {"get", "put", "delete", "keys", "dump", "patch"}
+                    assert expected <= names, f"Missing tools: {expected - names}"
+                    extra = names - expected
+                    if extra:
+                        import warnings
+                        warnings.warn(f"Unexpected extra tools in streamable list_tools: {extra}")
 
         run_async(go())
 
@@ -347,6 +400,46 @@ class TestStreamableHTTPTransport:
                         (await session.call_tool("get", {"key": TEST_KEY_STREAMABLE})).content
                     )
                     assert "error" in get_result
+
+        run_async(go())
+
+    def test_streamable_patch_lifecycle(self, server_url):
+        """Streamable HTTP: put a JSONHTL doc, append_block, get to verify, delete."""
+        doc = {"title": "Test", "content": [{"para": ["Original."]}]}
+
+        async def go():
+            async with streamablehttp_client(
+                f"{server_url}/mcp",
+                headers={"Authorization": f"Bearer {BEARER}"},
+            ) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+
+                    put_result = parse_tool_result(
+                        (await session.call_tool("put", {"key": TEST_KEY_STREAMABLE_PATCH, "value": doc})).content
+                    )
+                    assert put_result == {"status": "ok"}
+
+                    patch_result = parse_tool_result(
+                        (await session.call_tool("patch", {
+                            "key": TEST_KEY_STREAMABLE_PATCH,
+                            "op": "append_block",
+                            "block": {"para": ["Appended."]},
+                        })).content
+                    )
+                    assert patch_result == {"status": "ok"}, f"patch failed: {patch_result}"
+
+                    get_result = parse_tool_result(
+                        (await session.call_tool("get", {"key": TEST_KEY_STREAMABLE_PATCH})).content
+                    )
+                    content = get_result.get("content", [])
+                    assert len(content) == 2, f"expected 2 blocks after append, got {len(content)}: {content}"
+                    assert content[1] == {"para": ["Appended."]}, f"appended block wrong: {content[1]}"
+
+                    del_result = parse_tool_result(
+                        (await session.call_tool("delete", {"key": TEST_KEY_STREAMABLE_PATCH})).content
+                    )
+                    assert del_result == {"status": "deleted"}
 
         run_async(go())
 

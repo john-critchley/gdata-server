@@ -88,10 +88,10 @@ def delete_doc(key):
     except requests.exceptions.RequestException as e:
         return f"Error deleting document: {e}"
 
-def patch_doc(key, op, block=None, index=None, fields=None):
+def patch_doc(key, op, block=None, index=None, indices=None, fields=None):
     """Apply a block-level patch operation to a document.
 
-    ops: append_block, insert_block, replace_block, delete_block, patch_meta
+    ops: append_block, insert_block, replace_block, delete_block, delete_blocks, patch_meta
 
     Returns the server response dict, or a dict with 'error' on failure.
     """
@@ -100,6 +100,8 @@ def patch_doc(key, op, block=None, index=None, fields=None):
         body['block'] = block
     if index is not None:
         body['index'] = index
+    if indices is not None:
+        body['indices'] = indices
     if fields is not None:
         body['fields'] = fields
     try:
@@ -171,6 +173,7 @@ if __name__ == "__main__":
         print(f"  {prog} patch <key> insert_block <index> <block_json>")
         print(f"  {prog} patch <key> replace_block <index> <block_json>")
         print(f"  {prog} patch <key> delete_block <index>")
+        print(f"  {prog} patch <key> delete_blocks <index> [<index> ...]")
         print(f"  {prog} patch <key> patch_meta <fields_json>")
         print(f"        Apply a block-level patch to a document.")
         print()
@@ -184,6 +187,7 @@ if __name__ == "__main__":
         print(f"  {prog} load myconfig config.json")
         print(f"  {prog} patch mytodo append_block '{{\"para\": [\"New item.\"]}}'")
         print(f"  {prog} patch mytodo delete_block 3")
+        print(f"  {prog} patch mytodo delete_blocks 3 5 7")
         print(f"  {prog} patch mytodo patch_meta '{{\"version\": 5, \"updated\": \"2026-03-24\"}}'")
         print()
         print("Environment:")
@@ -263,6 +267,11 @@ if __name__ == "__main__":
                     print("Error: delete_block requires <index>", file=sys.stderr)
                     sys.exit(1)
                 kwargs['index'] = int(rest[0])
+            elif op == 'delete_blocks':
+                if not rest:
+                    print("Error: delete_blocks requires at least one <index>", file=sys.stderr)
+                    sys.exit(1)
+                kwargs['indices'] = [int(i) for i in rest]
             elif op == 'patch_meta':
                 if not rest:
                     print("Error: patch_meta requires <fields_json>", file=sys.stderr)

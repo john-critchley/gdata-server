@@ -166,6 +166,24 @@ def handle_PATCH_DOC_request(path: str, body: dict) -> dict:
             db[key] = json.dumps(doc)
             return {'status': 'ok'}
 
+        if op == 'delete_blocks':
+            indices = body.get('indices')
+            if not isinstance(indices, list) or not indices:
+                raise fastapi.HTTPException(status_code=400, detail="'indices' must be a non-empty list for delete_blocks")
+            if not all(isinstance(i, int) and i >= 0 for i in indices):
+                raise fastapi.HTTPException(status_code=400, detail="all indices must be non-negative integers")
+            max_index = len(content) - 1
+            out_of_range = [i for i in indices if i > max_index]
+            if out_of_range:
+                raise fastapi.HTTPException(
+                    status_code=400,
+                    detail=f"indices out of range: {out_of_range} (content has {len(content)} block(s))"
+                )
+            for i in sorted(set(indices), reverse=True):
+                content.pop(i)
+            db[key] = json.dumps(doc)
+            return {'status': 'ok'}
+
         if op in ('insert_block', 'replace_block', 'delete_block'):
             index = body.get('index')
             if index is None:
@@ -194,7 +212,7 @@ def handle_PATCH_DOC_request(path: str, body: dict) -> dict:
 
         raise fastapi.HTTPException(
             status_code=400,
-            detail=f"unknown op: {op!r}. Supported: append_block, insert_block, replace_block, delete_block, patch_meta"
+            detail=f"unknown op: {op!r}. Supported: append_block, insert_block, replace_block, delete_block, delete_blocks, patch_meta"
         )
 
 

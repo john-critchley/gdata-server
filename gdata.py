@@ -1,8 +1,14 @@
 #!/usr/bin/python3
 import json
+import errno
 import dbm.gnu as gdbm
 import urllib.parse
 import requests
+
+
+class GDataLockedError(gdbm.error):
+    """Database is locked for writing."""
+    pass
 
 class gdata_local_raw:
     """
@@ -21,7 +27,14 @@ class gdata_local_raw:
     """
     
     def __init__(self, gdbm_file='.gdbm', mode='c', mask=0o600):
-        self.db = gdbm.open(gdbm_file, mode, mask)
+        try:
+            self.db = gdbm.open(gdbm_file, mode, mask)
+        except gdbm.error as e:
+            # errno.EAGAIN is the typical indicator that the database
+            # file is currently locked by another writer.
+            if getattr(e, 'errno', None) == errno.EAGAIN:
+                raise GDataLockedError(str(e)) from e
+            raise
         self.open = True
 
     def __enter__(self):

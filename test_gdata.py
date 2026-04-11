@@ -545,6 +545,134 @@ def test_post_flush():
         raise AssertionError("Expected status field in flush response")
     return req, resp.status_code, resp_body
 
+
+def test_notes_client_load():
+    """notes_client.py load <key> <file> should load a JSON file into a key."""
+    import subprocess, tempfile
+    req = 'notes_client.py load test_load_key file.json'
+
+    # Create a temp JSON file
+    test_doc = {"title": "Load Test", "value": 42}
+    tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+    json.dump(test_doc, tmp)
+    tmp.close()
+
+    try:
+        # Run load command against test server
+        result = subprocess.run(
+            [sys.executable, 'notes_client.py', 'load', 'test_load_key', tmp.name],
+            capture_output=True, text=True,
+            env={**os.environ, 'NOTES_URL': BASE_URL}
+        )
+        if result.returncode != 0:
+            raise AssertionError(f"load exited {result.returncode}: {result.stderr}")
+        if 'saved' not in result.stdout.lower() and 'success' not in result.stdout.lower():
+            raise AssertionError(f"Unexpected output: {result.stdout}")
+
+        # Verify the key was written
+        resp = requests.get(f"{BASE_URL}/test_load_key")
+        if resp.status_code != 200:
+            raise AssertionError(f"Key not found after load: {resp.status_code}")
+        loaded = resp.json()
+        if loaded.get('title') != 'Load Test' or loaded.get('value') != 42:
+            raise AssertionError(f"Value mismatch: {loaded}")
+
+        # File should still exist (no -d)
+        if not os.path.exists(tmp.name):
+            raise AssertionError("File was deleted without -d flag")
+
+        return req, 200, format_json(loaded)
+    finally:
+        # Clean up
+        if os.path.exists(tmp.name):
+            os.unlink(tmp.name)
+        requests.delete(f"{BASE_URL}/test_load_key")
+
+
+def test_notes_client_load_delete():
+    """notes_client.py load -d <key> <file> should load then delete the file."""
+    import subprocess, tempfile
+    req = 'notes_client.py load -d test_load_del_key file.json'
+
+    # Create a temp JSON file
+    test_doc = {"title": "Load Delete Test", "items": [1, 2, 3]}
+    tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+    json.dump(test_doc, tmp)
+    tmp.close()
+
+    try:
+        # Run load -d command against test server
+        result = subprocess.run(
+            [sys.executable, 'notes_client.py', 'load', '-d', 'test_load_del_key', tmp.name],
+            capture_output=True, text=True,
+            env={**os.environ, 'NOTES_URL': BASE_URL}
+        )
+        if result.returncode != 0:
+            raise AssertionError(f"load -d exited {result.returncode}: {result.stderr}")
+
+        # Verify the key was written
+        resp = requests.get(f"{BASE_URL}/test_load_del_key")
+        if resp.status_code != 200:
+            raise AssertionError(f"Key not found after load -d: {resp.status_code}")
+        loaded = resp.json()
+        if loaded.get('title') != 'Load Delete Test':
+            raise AssertionError(f"Value mismatch: {loaded}")
+
+        # File should have been deleted
+        if os.path.exists(tmp.name):
+            raise AssertionError("File still exists after load -d")
+
+        return req, 200, format_json(loaded)
+    finally:
+        # Clean up
+        if os.path.exists(tmp.name):
+            os.unlink(tmp.name)
+        requests.delete(f"{BASE_URL}/test_load_del_key")
+
+
+def test_notes_client_load_missing_file():
+    """notes_client.py load with non-existent file should fail."""
+    import subprocess
+    req = 'notes_client.py load test_key /no/such/file.json'
+
+    result = subprocess.run(
+        [sys.executable, 'notes_client.py', 'load', 'test_key', '/no/such/file.json'],
+        capture_output=True, text=True,
+        env={**os.environ, 'NOTES_URL': BASE_URL}
+    )
+    if result.returncode == 0:
+        raise AssertionError("load should fail for missing file")
+
+    return req, 1, result.stderr.strip() or result.stdout.strip()
+
+
+def test_notes_client_load_bad_json():
+    """notes_client.py load with invalid JSON file should fail."""
+    import subprocess, tempfile
+    req = 'notes_client.py load test_key bad.json'
+
+    tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+    tmp.write('{this is not valid json}')
+    tmp.close()
+
+    try:
+        result = subprocess.run(
+            [sys.executable, 'notes_client.py', 'load', 'test_key', tmp.name],
+            capture_output=True, text=True,
+            env={**os.environ, 'NOTES_URL': BASE_URL}
+        )
+        if result.returncode == 0:
+            raise AssertionError("load should fail for bad JSON")
+
+        # File should still exist (load failed, so -d wouldn't apply even if given)
+        if not os.path.exists(tmp.name):
+            raise AssertionError("File was deleted despite load failure")
+
+        return req, 1, result.stderr.strip() or result.stdout.strip()
+    finally:
+        if os.path.exists(tmp.name):
+            os.unlink(tmp.name)
+
 # Run all tests
 tests = [
     ("Connectivity (POST keys)", test_connectivity),
@@ -573,6 +701,10 @@ tests = [
     ("Local delete and missing", test_local_delete_and_missing),
     ("HTTP delete missing raises KeyError", test_http_delete_missing_raises_keyerror),
     ("POST flush", test_post_flush),
+    ("notes_client load", test_notes_client_load),
+    ("notes_client load -d (delete file)", test_notes_client_load_delete),
+    ("notes_client load missing file", test_notes_client_load_missing_file),
+    ("notes_client load bad JSON", test_notes_client_load_bad_json),
 ]
 
 if __name__ == '__main__':

@@ -31,4 +31,4 @@
 58 23 * * * exec </dev/null >> /home/john/py/popit3/lr.log 2>&1; cd /home/john/py/popit3; ./lr
 
 # Daily backup of notes system at 2:30 AM
-30 2 * * * cd /home/john/py/gdata-server && ./dump_notes backup_$(date +\%Y-\%m-\%d).zip >> backup.log 2>&1
+30 * * * * cd $HOME/py/gdata-server && ./dump_notes backups/backup_$(date +\%Y-\%m-\%d-%H-%M).zip >> backups/backup.log 2>&1

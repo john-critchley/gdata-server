@@ -66,6 +66,25 @@ A block of code or preformatted text. Contains `lang` (string, may be empty) and
 
 Additional keys on a codeblock (e.g. `name`, `exec`) are not defined by this spec but may be defined by convention documents.
 
+#### list
+
+A labelled or unlabelled list of items. Contains `label` (string, optional), `ordered` (boolean, optional, default false), and `items` (list).
+
+```json
+{"list": {"label": "issues", "ordered": false, "items": [
+  "First item",
+  ["inline ", {"code": "elements"}, " are also valid"],
+  {"id": "foo", "title": "An item as a key-value object"}
+]}}
+```
+
+Each item may be:
+- A **string** — plain text (markdown inline formatting permitted).
+- A **list of inline elements** — same content model as `para`.
+- An **object** — arbitrary key-value pairs; renderers display these as `key: value` entries within the list item.
+
+`label`, if present, is rendered as a visible heading or prefix immediately before the list. `ordered` selects `<ol>` (true) or `<ul>` (false).
+
 
 ## Inline Elements
 

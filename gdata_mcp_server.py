@@ -152,6 +152,24 @@ async def db_patch(db_path: str, key: str, body: dict) -> dict:
             db[key] = json.dumps(doc)
             return {'status': 'ok'}
 
+        if op == 'delete_blocks':
+            indices = body.get('indices')
+            if not isinstance(indices, list) or not indices:
+                raise fastapi.HTTPException(status_code=400, detail="'indices' must be a non-empty list for delete_blocks")
+            if not all(isinstance(i, int) and i >= 0 for i in indices):
+                raise fastapi.HTTPException(status_code=400, detail="all indices must be non-negative integers")
+            max_index = len(content) - 1
+            out_of_range = [i for i in indices if i > max_index]
+            if out_of_range:
+                raise fastapi.HTTPException(
+                    status_code=400,
+                    detail=f"indices out of range: {out_of_range} (content has {len(content)} block(s))"
+                )
+            for i in sorted(set(indices), reverse=True):
+                content.pop(i)
+            db[key] = json.dumps(doc)
+            return {'status': 'ok'}
+
         if op in ('insert_block', 'replace_block', 'delete_block'):
             index = body.get('index')
             if index is None:
@@ -180,7 +198,7 @@ async def db_patch(db_path: str, key: str, body: dict) -> dict:
 
         raise fastapi.HTTPException(
             status_code=400,
-            detail=f"unknown op: {op!r}. Supported: append_block, insert_block, replace_block, delete_block, patch_meta"
+            detail=f"unknown op: {op!r}. Supported: append_block, insert_block, replace_block, delete_block, delete_blocks, patch_meta"
         )
 
 
@@ -281,7 +299,7 @@ def _make_tool_server(db_path: str) -> Server:
         return [
             types.Tool(
                 name="get",
-                description="Get a value by key. Returns the parsed JSON value.",
+                description="Get a value by key. Returns the parsed JSON value. If unfamiliar with this notes system, call with key='README' first for orientation.",
                 inputSchema={
                     "type": "object",
                     "properties": {"key": {"type": "string"}},
@@ -324,7 +342,7 @@ def _make_tool_server(db_path: str) -> Server:
                 description=(
                     "Apply a block-level patch operation to a JSONHTL note. "
                     "Prefer this over put() for targeted edits to avoid rewriting the full document. "
-                    "ops: append_block, insert_block, replace_block, delete_block, patch_meta."
+                    "ops: append_block, insert_block, replace_block, delete_block, delete_blocks, patch_meta."
                 ),
                 inputSchema={
                     "type": "object",
@@ -332,7 +350,7 @@ def _make_tool_server(db_path: str) -> Server:
                         "key": {"type": "string", "description": "Note key"},
                         "op": {
                             "type": "string",
-                            "enum": ["append_block", "insert_block", "replace_block", "delete_block", "patch_meta"],
+                            "enum": ["append_block", "insert_block", "replace_block", "delete_block", "delete_blocks", "patch_meta"],
                             "description": "Operation to perform",
                         },
                         "block": {
@@ -342,6 +360,11 @@ def _make_tool_server(db_path: str) -> Server:
                         "index": {
                             "type": "integer",
                             "description": "0-based block index — required for insert_block, replace_block, delete_block",
+                        },
+                        "indices": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "description": "List of 0-based block indices — required for delete_blocks. Order does not matter; duplicates are ignored.",
                         },
                         "fields": {
                             "type": "object",
@@ -387,7 +410,14 @@ def _make_tool_server(db_path: str) -> Server:
                 result = {"items": await db_dump(db_path)}
             elif name == "patch":
                 key = arguments["key"]
-                body = {k: arguments[k] for k in ("op", "block", "index", "fields") if k in arguments}
+                body = {k: arguments[k] for k in ("op", "block", "index", "indices", "fields") if k in arguments}
+                # claude.ai MCP client serialises object values to strings; unwrap if needed
+                for field in ("block", "fields"):
+                    if isinstance(body.get(field), str):
+                        try:
+                            body[field] = json.loads(body[field])
+                        except json.JSONDecodeError:
+                            pass
                 try:
                     result = await db_patch(db_path, key, body)
                 except fastapi.HTTPException as e:
