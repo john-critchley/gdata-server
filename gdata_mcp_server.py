@@ -206,9 +206,19 @@ async def db_patch(db_path: str, key: str, body: dict) -> dict:
 # REST app (FastAPI) — same interface as gdata_server.py
 # ---------------------------------------------------------------------------
 
+_SOURCE_MTIME = os.path.getmtime(__file__)
+
+
 def make_rest_app(db_path: str) -> fastapi.FastAPI:
     app = fastapi.FastAPI()
     app.include_router(gdata_oauth.router)
+
+    @app.middleware("http")
+    async def auto_reload(request: fastapi.Request, call_next):
+        response = await call_next(request)
+        if os.path.getmtime(__file__) != _SOURCE_MTIME:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        return response
 
     def _key(path: str) -> str:
         return urllib.parse.unquote(path.strip('/'))
@@ -354,8 +364,7 @@ def _make_tool_server(db_path: str) -> Server:
                             "description": "Operation to perform",
                         },
                         "block": {
-                            "type": "object",
-                            "description": "JSONHTL block — required for append_block, insert_block, replace_block",
+                            "description": "JSONHTL block — required for append_block, insert_block, replace_block (may be a JSON-encoded string; handler unwraps automatically)",
                         },
                         "index": {
                             "type": "integer",
@@ -367,8 +376,7 @@ def _make_tool_server(db_path: str) -> Server:
                             "description": "List of 0-based block indices — required for delete_blocks. Order does not matter; duplicates are ignored.",
                         },
                         "fields": {
-                            "type": "object",
-                            "description": "Metadata fields to update — required for patch_meta (title, version, updated, tags; not content)",
+                            "description": "Metadata fields to update — required for patch_meta (title, version, updated, tags; not content). May be a JSON-encoded string; handler unwraps automatically.",
                         },
                     },
                     "required": ["key", "op"],

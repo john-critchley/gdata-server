@@ -46,6 +46,7 @@ TEST_KEY_SSE_PATCH = "_test/sse/patch"
 TEST_KEY_STREAMABLE = "_test/streamable/roundtrip"
 TEST_KEY_STREAMABLE_PATCH = "_test/streamable/patch"
 TEST_KEY_CROSS = "_test/cross/transport"
+TEST_KEY_PATCH_OPS = "_test/mcp/patch-ops"
 
 
 # ---------------------------------------------------------------------------
@@ -536,3 +537,180 @@ class TestCrossTransport:
                     await session.call_tool("delete", {"key": TEST_KEY_CROSS})
 
         run_async(go())
+
+
+# ---------------------------------------------------------------------------
+# Comprehensive MCP patch op tests (via Streamable HTTP)
+# ---------------------------------------------------------------------------
+
+BASE_DOC = {"title": "Test", "content": [
+    {"heading": {"level": 1, "text": "Title"}},
+    {"para": ["First."]},
+    {"para": ["Second."]},
+]}
+
+
+class TestMCPPatchOps:
+    """Full patch op coverage via MCP streamable HTTP transport."""
+
+    def _client(self, server_url):
+        return streamablehttp_client(
+            f"{server_url}/mcp",
+            headers={"Authorization": f"Bearer {BEARER}"},
+        )
+
+    def _put_doc(self, server_url):
+        async def go():
+            async with self._client(server_url) as (r, w, _):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    result = parse_tool_result(
+                        (await s.call_tool("put", {"key": TEST_KEY_PATCH_OPS, "value": BASE_DOC})).content
+                    )
+                    assert result == {"status": "ok"}
+        run_async(go())
+
+    def _get_doc(self, server_url):
+        async def go():
+            async with self._client(server_url) as (r, w, _):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    return parse_tool_result(
+                        (await s.call_tool("get", {"key": TEST_KEY_PATCH_OPS})).content
+                    )
+        return run_async(go())
+
+    def _patch(self, server_url, **kwargs):
+        async def go():
+            async with self._client(server_url) as (r, w, _):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    return parse_tool_result(
+                        (await s.call_tool("patch", {"key": TEST_KEY_PATCH_OPS, **kwargs})).content
+                    )
+        return run_async(go())
+
+    def _delete_doc(self, server_url):
+        async def go():
+            async with self._client(server_url) as (r, w, _):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    await s.call_tool("delete", {"key": TEST_KEY_PATCH_OPS})
+        run_async(go())
+
+    def setup_method(self, method):
+        pass  # server_url fixture handles setup
+
+    def test_insert_block(self, server_url):
+        self._put_doc(server_url)
+        try:
+            result = self._patch(server_url, op="insert_block", index=1,
+                                 block={"para": ["Inserted."]})
+            assert result == {"status": "ok"}
+            content = self._get_doc(server_url)["content"]
+            assert len(content) == 4
+            assert content[1] == {"para": ["Inserted."]}
+            assert content[2] == {"para": ["First."]}
+        finally:
+            self._delete_doc(server_url)
+
+    def test_replace_block(self, server_url):
+        self._put_doc(server_url)
+        try:
+            result = self._patch(server_url, op="replace_block", index=1,
+                                 block={"para": ["Replaced."]})
+            assert result == {"status": "ok"}
+            content = self._get_doc(server_url)["content"]
+            assert len(content) == 3
+            assert content[1] == {"para": ["Replaced."]}
+        finally:
+            self._delete_doc(server_url)
+
+    def test_delete_block(self, server_url):
+        self._put_doc(server_url)
+        try:
+            result = self._patch(server_url, op="delete_block", index=1)
+            assert result == {"status": "ok"}
+            content = self._get_doc(server_url)["content"]
+            assert len(content) == 2
+            assert content[1] == {"para": ["Second."]}
+        finally:
+            self._delete_doc(server_url)
+
+    def test_delete_blocks(self, server_url):
+        self._put_doc(server_url)
+        try:
+            result = self._patch(server_url, op="delete_blocks", indices=[0, 2])
+            assert result == {"status": "ok"}
+            content = self._get_doc(server_url)["content"]
+            assert len(content) == 1
+            assert content[0] == {"para": ["First."]}
+        finally:
+            self._delete_doc(server_url)
+
+    def test_patch_meta(self, server_url):
+        self._put_doc(server_url)
+        try:
+            result = self._patch(server_url, op="patch_meta",
+                                 fields={"version": 3, "updated": "2026-04-14"})
+            assert result == {"status": "ok"}
+            d = self._get_doc(server_url)
+            assert d["version"] == 3
+            assert d["updated"] == "2026-04-14"
+            assert len(d["content"]) == 3  # content untouched
+        finally:
+            self._delete_doc(server_url)
+
+    def test_patch_meta_content_forbidden(self, server_url):
+        self._put_doc(server_url)
+        try:
+            result = self._patch(server_url, op="patch_meta", fields={"content": []})
+            assert "error" in result
+        finally:
+            self._delete_doc(server_url)
+
+    def test_patch_missing_key_returns_error(self, server_url):
+        async def go():
+            async with self._client(server_url) as (r, w, _):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    return parse_tool_result(
+                        (await s.call_tool("patch", {
+                            "key": "_test/no-such-key-xyz",
+                            "op": "append_block",
+                            "block": {"para": ["x"]},
+                        })).content
+                    )
+        result = run_async(go())
+        assert "error" in result
+
+    def test_patch_out_of_range_returns_error(self, server_url):
+        self._put_doc(server_url)
+        try:
+            result = self._patch(server_url, op="delete_block", index=99)
+            assert "error" in result
+        finally:
+            self._delete_doc(server_url)
+
+    def test_block_string_unwrapping(self, server_url):
+        """MCP client may send block as JSON string; handler must unwrap it."""
+        self._put_doc(server_url)
+        try:
+            async def go():
+                async with self._client(server_url) as (r, w, _):
+                    async with ClientSession(r, w) as s:
+                        await s.initialize()
+                        # Pass block as a JSON string (simulates claude.ai client behaviour)
+                        return parse_tool_result(
+                            (await s.call_tool("patch", {
+                                "key": TEST_KEY_PATCH_OPS,
+                                "op": "append_block",
+                                "block": json.dumps({"para": ["String-wrapped block."]}),
+                            })).content
+                        )
+            result = run_async(go())
+            assert result == {"status": "ok"}
+            content = self._get_doc(server_url)["content"]
+            assert content[-1] == {"para": ["String-wrapped block."]}
+        finally:
+            self._delete_doc(server_url)

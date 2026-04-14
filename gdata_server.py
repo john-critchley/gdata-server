@@ -373,7 +373,16 @@ if __name__=="__main__":
 
 
 # FastAPI application
-app = fastapi.FastAPI()    
+app = fastapi.FastAPI()
+
+_SOURCE_MTIME = os.path.getmtime(__file__)
+
+@app.middleware("http")
+async def auto_reload(request: fastapi.Request, call_next):
+    response = await call_next(request)
+    if os.path.getmtime(__file__) != _SOURCE_MTIME:
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    return response
 
 
 @app.get("/{path:path}")
