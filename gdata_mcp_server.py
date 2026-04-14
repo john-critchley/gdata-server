@@ -15,9 +15,12 @@ All db access is serialised via a single asyncio.Lock.
 
 import argparse
 import asyncio
+import copy
 import json
 import logging
 import os
+import random
+import string
 import sys
 
 import fastapi
@@ -59,6 +62,193 @@ def _open_db(path: str):
     return _db
 
 
+# ---------------------------------------------------------------------------
+# Sidecar helpers (mirrors gdata_server.py — keep in sync)
+# ---------------------------------------------------------------------------
+
+_SIDECAR_PREFIX = '\x00'
+
+
+def _sidecar_key(key: str) -> str:
+    return _SIDECAR_PREFIX + key
+
+
+def _new_block_id() -> str:
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+
+
+def _increment_rev(rev: str) -> str:
+    return f'r{int(rev[1:]) + 1}'
+
+
+def _get_sidecar(db, key: str) -> dict | None:
+    sk = _sidecar_key(key)
+    if sk not in db:
+        return None
+    try:
+        return json.loads(db[sk])
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+def _save_sidecar(db, key: str, sidecar: dict):
+    db[_sidecar_key(key)] = json.dumps(sidecar)
+
+
+def _get_or_create_sidecar(db, key: str, content: list) -> dict:
+    sidecar = _get_sidecar(db, key)
+    if sidecar is None:
+        sidecar = {'rev': 'r1', 'block_ids': [_new_block_id() for _ in content]}
+        _save_sidecar(db, key, sidecar)
+    elif len(sidecar.get('block_ids', [])) != len(content):
+        sidecar['block_ids'] = [_new_block_id() for _ in content]
+        _save_sidecar(db, key, sidecar)
+    return sidecar
+
+
+def _apply_op(op_body: dict, doc: dict, block_ids: list) -> dict:
+    """Apply one patch op to doc and block_ids in-place (no DB access)."""
+    op = op_body.get('op')
+
+    if op == 'patch_meta':
+        fields = op_body.get('fields')
+        if not isinstance(fields, dict):
+            raise fastapi.HTTPException(status_code=400, detail="'fields' must be an object")
+        if 'content' in fields:
+            raise fastapi.HTTPException(status_code=400, detail="'content' cannot be updated via patch_meta")
+        doc.update(fields)
+        return {'status': 'ok'}
+
+    content = doc.get('content')
+    if content is None:
+        raise fastapi.HTTPException(status_code=409, detail="document has no 'content' key")
+    if not isinstance(content, list):
+        raise fastapi.HTTPException(
+            status_code=400,
+            detail="'content' is not a list; cannot patch block-level (PUT the full document first)"
+        )
+
+    block_id = op_body.get('block_id')
+
+    if op == 'insert_before':
+        if block_id is None:
+            raise fastapi.HTTPException(status_code=400, detail="'block_id' is required for insert_before")
+        block = op_body.get('block')
+        if block is None:
+            raise fastapi.HTTPException(status_code=400, detail="'block' is required for insert_before")
+        try:
+            idx = block_ids.index(block_id)
+        except ValueError:
+            raise fastapi.HTTPException(status_code=404, detail=f"block_id not found: {block_id!r}")
+        new_id = _new_block_id()
+        content.insert(idx, block)
+        block_ids.insert(idx, new_id)
+        return {'status': 'ok', 'inserted_block_id': new_id}
+
+    if op == 'insert_after':
+        if block_id is None:
+            raise fastapi.HTTPException(status_code=400, detail="'block_id' is required for insert_after")
+        block = op_body.get('block')
+        if block is None:
+            raise fastapi.HTTPException(status_code=400, detail="'block' is required for insert_after")
+        try:
+            idx = block_ids.index(block_id)
+        except ValueError:
+            raise fastapi.HTTPException(status_code=404, detail=f"block_id not found: {block_id!r}")
+        new_id = _new_block_id()
+        content.insert(idx + 1, block)
+        block_ids.insert(idx + 1, new_id)
+        return {'status': 'ok', 'inserted_block_id': new_id}
+
+    if op == 'replace_block' and block_id is not None:
+        block = op_body.get('block')
+        if block is None:
+            raise fastapi.HTTPException(status_code=400, detail="'block' is required for replace_block")
+        try:
+            idx = block_ids.index(block_id)
+        except ValueError:
+            raise fastapi.HTTPException(status_code=404, detail=f"block_id not found: {block_id!r}")
+        content[idx] = block
+        return {'status': 'ok'}
+
+    if op == 'delete_block' and block_id is not None:
+        try:
+            idx = block_ids.index(block_id)
+        except ValueError:
+            raise fastapi.HTTPException(status_code=404, detail=f"block_id not found: {block_id!r}")
+        content.pop(idx)
+        block_ids.pop(idx)
+        return {'status': 'ok'}
+
+    if op == 'append_block':
+        block = op_body.get('block')
+        if block is None:
+            raise fastapi.HTTPException(status_code=400, detail="'block' is required for append_block")
+        new_id = _new_block_id()
+        content.append(block)
+        block_ids.append(new_id)
+        return {'status': 'ok', 'inserted_block_id': new_id}
+
+    if op == 'delete_blocks':
+        indices = op_body.get('indices')
+        if not isinstance(indices, list) or not indices:
+            raise fastapi.HTTPException(status_code=400, detail="'indices' must be a non-empty list for delete_blocks")
+        if not all(isinstance(i, int) and i >= 0 for i in indices):
+            raise fastapi.HTTPException(status_code=400, detail="all indices must be non-negative integers")
+        max_index = len(content) - 1
+        out_of_range = [i for i in indices if i > max_index]
+        if out_of_range:
+            raise fastapi.HTTPException(
+                status_code=400,
+                detail=f"indices out of range: {out_of_range} (content has {len(content)} block(s))"
+            )
+        for i in sorted(set(indices), reverse=True):
+            content.pop(i)
+            block_ids.pop(i)
+        return {'status': 'ok'}
+
+    if op in ('insert_block', 'replace_block', 'delete_block'):
+        index = op_body.get('index')
+        if index is None:
+            raise fastapi.HTTPException(status_code=400, detail=f"'index' is required for {op}")
+        if not isinstance(index, int) or index < 0:
+            raise fastapi.HTTPException(status_code=400, detail="'index' must be a non-negative integer")
+        max_index = len(content) if op == 'insert_block' else len(content) - 1
+        if index > max_index:
+            raise fastapi.HTTPException(
+                status_code=400,
+                detail=f"index {index} out of range (content has {len(content)} block(s))"
+            )
+        if op == 'delete_block':
+            content.pop(index)
+            block_ids.pop(index)
+            return {'status': 'ok'}
+        block = op_body.get('block')
+        if block is None:
+            raise fastapi.HTTPException(status_code=400, detail=f"'block' is required for {op}")
+        if op == 'insert_block':
+            new_id = _new_block_id()
+            content.insert(index, block)
+            block_ids.insert(index, new_id)
+            return {'status': 'ok', 'inserted_block_id': new_id}
+        else:
+            content[index] = block
+            return {'status': 'ok'}
+
+    raise fastapi.HTTPException(
+        status_code=400,
+        detail=(
+            f"unknown op: {op!r}. Supported: append_block, insert_block, replace_block, "
+            "delete_block, delete_blocks, patch_meta, insert_before, insert_after, "
+            "batch, get_with_block_ids"
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Async DB operations
+# ---------------------------------------------------------------------------
+
 async def db_get(db_path: str, key: str):
     async with _db_lock:
         db = _open_db(db_path)
@@ -67,9 +257,34 @@ async def db_get(db_path: str, key: str):
         return db[key], True
 
 
-async def db_put(db_path: str, key: str, value_json: str):
+async def db_put(db_path: str, key: str, value_json: str, if_rev: str | None = None):
     async with _db_lock:
-        _open_db(db_path)[key] = value_json
+        db = _open_db(db_path)
+        old_sidecar = _get_sidecar(db, key)
+
+        if if_rev is not None:
+            current_rev = old_sidecar['rev'] if old_sidecar else None
+            if current_rev != if_rev:
+                raise fastapi.HTTPException(
+                    status_code=412,
+                    detail=f"revision mismatch: expected {if_rev!r}, current rev is {current_rev!r}"
+                )
+
+        db[key] = value_json
+
+        try:
+            doc = json.loads(value_json)
+            content = doc.get('content', []) if isinstance(doc, dict) else []
+            if not isinstance(content, list):
+                content = []
+        except json.JSONDecodeError:
+            content = []
+
+        new_sidecar = {
+            'rev': _increment_rev(old_sidecar['rev'] if old_sidecar else 'r0'),
+            'block_ids': [_new_block_id() for _ in content],
+        }
+        _save_sidecar(db, key, new_sidecar)
 
 
 async def db_delete(db_path: str, key: str) -> bool:
@@ -78,19 +293,22 @@ async def db_delete(db_path: str, key: str) -> bool:
         if key not in db:
             return False
         del db[key]
+        sk = _sidecar_key(key)
+        if sk in db:
+            del db[sk]
         return True
 
 
 async def db_keys(db_path: str) -> list[str]:
     async with _db_lock:
-        return sorted(list(_open_db(db_path).keys()))
+        return sorted(k for k in _open_db(db_path).keys() if not k.startswith(_SIDECAR_PREFIX))
 
 
 async def db_dump(db_path: str) -> dict:
     async with _db_lock:
         db = _open_db(db_path)
         items = {}
-        for k in sorted(db.keys()):
+        for k in sorted(k for k in db.keys() if not k.startswith(_SIDECAR_PREFIX)):
             raw = db[k]
             try:
                 items[k] = json.loads(raw)
@@ -125,81 +343,67 @@ async def db_patch(db_path: str, key: str, body: dict) -> dict:
 
         op = body.get('op')
 
-        if op == 'patch_meta':
-            fields = body.get('fields')
-            if not isinstance(fields, dict):
-                raise fastapi.HTTPException(status_code=400, detail="'fields' must be an object")
-            if 'content' in fields:
-                raise fastapi.HTTPException(status_code=400, detail="'content' cannot be updated via patch_meta")
-            doc.update(fields)
-            db[key] = json.dumps(doc)
-            return {'status': 'ok'}
+        # --- Read-only op ---
+        if op == 'get_with_block_ids':
+            content = doc.get('content')
+            blocks = content if isinstance(content, list) else []
+            sidecar = _get_or_create_sidecar(db, key, blocks)
+            return {'document': doc, 'rev': sidecar['rev'], 'block_ids': sidecar['block_ids']}
 
+        # --- Concurrency guard ---
+        if_rev = body.get('if_rev')
+        if if_rev is not None:
+            sidecar = _get_sidecar(db, key)
+            current_rev = sidecar['rev'] if sidecar else None
+            if current_rev != if_rev:
+                raise fastapi.HTTPException(
+                    status_code=409,
+                    detail=f"revision mismatch: expected {if_rev!r}, current rev is {current_rev!r}"
+                )
+
+        # --- Load/create sidecar ---
         content = doc.get('content')
-        if content is None:
-            raise fastapi.HTTPException(status_code=409, detail="document has no 'content' key")
-        if not isinstance(content, list):
-            raise fastapi.HTTPException(
-                status_code=400,
-                detail="'content' is not a list; cannot patch block-level (PUT the full document first)"
-            )
+        blocks = content if isinstance(content, list) else []
+        sidecar = _get_or_create_sidecar(db, key, blocks)
+        block_ids = sidecar['block_ids']
 
-        if op == 'append_block':
-            block = body.get('block')
-            if block is None:
-                raise fastapi.HTTPException(status_code=400, detail="'block' is required for append_block")
-            content.append(block)
-            db[key] = json.dumps(doc)
-            return {'status': 'ok'}
+        # --- Batch op ---
+        if op == 'batch':
+            ops = body.get('ops')
+            if isinstance(ops, str):
+                try:
+                    ops = json.loads(ops)
+                except json.JSONDecodeError:
+                    raise fastapi.HTTPException(status_code=400, detail="'ops' could not be parsed as JSON")
+            if not isinstance(ops, list) or not ops:
+                raise fastapi.HTTPException(status_code=400, detail="'ops' must be a non-empty list")
 
-        if op == 'delete_blocks':
-            indices = body.get('indices')
-            if not isinstance(indices, list) or not indices:
-                raise fastapi.HTTPException(status_code=400, detail="'indices' must be a non-empty list for delete_blocks")
-            if not all(isinstance(i, int) and i >= 0 for i in indices):
-                raise fastapi.HTTPException(status_code=400, detail="all indices must be non-negative integers")
-            max_index = len(content) - 1
-            out_of_range = [i for i in indices if i > max_index]
-            if out_of_range:
-                raise fastapi.HTTPException(
-                    status_code=400,
-                    detail=f"indices out of range: {out_of_range} (content has {len(content)} block(s))"
-                )
-            for i in sorted(set(indices), reverse=True):
-                content.pop(i)
-            db[key] = json.dumps(doc)
-            return {'status': 'ok'}
+            doc_work = copy.deepcopy(doc)
+            block_ids_work = list(block_ids)
+            inserted_block_ids = []
+            for op_body in ops:
+                if not isinstance(op_body, dict):
+                    raise fastapi.HTTPException(status_code=400, detail="each op in batch must be a JSON object")
+                r = _apply_op(op_body, doc_work, block_ids_work)
+                if 'inserted_block_id' in r:
+                    inserted_block_ids.append(r['inserted_block_id'])
 
-        if op in ('insert_block', 'replace_block', 'delete_block'):
-            index = body.get('index')
-            if index is None:
-                raise fastapi.HTTPException(status_code=400, detail=f"'index' is required for {op}")
-            if not isinstance(index, int) or index < 0:
-                raise fastapi.HTTPException(status_code=400, detail="'index' must be a non-negative integer")
-            max_index = len(content) if op == 'insert_block' else len(content) - 1
-            if index > max_index:
-                raise fastapi.HTTPException(
-                    status_code=400,
-                    detail=f"index {index} out of range (content has {len(content)} block(s))"
-                )
-            if op == 'delete_block':
-                content.pop(index)
-                db[key] = json.dumps(doc)
-                return {'status': 'ok'}
-            block = body.get('block')
-            if block is None:
-                raise fastapi.HTTPException(status_code=400, detail=f"'block' is required for {op}")
-            if op == 'insert_block':
-                content.insert(index, block)
-            else:
-                content[index] = block
-            db[key] = json.dumps(doc)
-            return {'status': 'ok'}
+            new_rev = _increment_rev(sidecar['rev'])
+            sidecar['rev'] = new_rev
+            sidecar['block_ids'] = block_ids_work
+            db[key] = json.dumps(doc_work)
+            _save_sidecar(db, key, sidecar)
+            return {'status': 'ok', 'rev': new_rev, 'inserted_block_ids': inserted_block_ids}
 
-        raise fastapi.HTTPException(
-            status_code=400,
-            detail=f"unknown op: {op!r}. Supported: append_block, insert_block, replace_block, delete_block, delete_blocks, patch_meta"
-        )
+        # --- Single op ---
+        result = _apply_op(body, doc, block_ids)
+        new_rev = _increment_rev(sidecar['rev'])
+        sidecar['rev'] = new_rev
+        sidecar['block_ids'] = block_ids
+        db[key] = json.dumps(doc)
+        _save_sidecar(db, key, sidecar)
+        result['rev'] = new_rev
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -309,21 +513,38 @@ def _make_tool_server(db_path: str) -> Server:
         return [
             types.Tool(
                 name="get",
-                description="Get a value by key. Returns the parsed JSON value. If unfamiliar with this notes system, call with key='README' first for orientation.",
+                description=(
+                    "Get a value by key. Returns the parsed JSON value. "
+                    "Use include_block_ids=True before a batch edit to obtain stable block IDs and the current rev. "
+                    "If unfamiliar with this notes system, call with key='README' first."
+                ),
                 inputSchema={
                     "type": "object",
-                    "properties": {"key": {"type": "string"}},
+                    "properties": {
+                        "key": {"type": "string"},
+                        "include_block_ids": {
+                            "type": "boolean",
+                            "description": "If true, returns {document, rev, block_ids} instead of the raw document. Use before batch edits.",
+                        },
+                    },
                     "required": ["key"],
                 },
             ),
             types.Tool(
                 name="put",
-                description="Store a value under a key.",
+                description=(
+                    "Store a full document under a key. Regenerates all block IDs. "
+                    "Use patch() or batch() for targeted edits to individual blocks."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "key": {"type": "string"},
                         "value": {"description": "Any JSON-serialisable value"},
+                        "if_rev": {
+                            "type": "string",
+                            "description": "Optimistic concurrency token. Returns 412 if current rev differs. Optional.",
+                        },
                     },
                     "required": ["key", "value"],
                 },
@@ -350,9 +571,12 @@ def _make_tool_server(db_path: str) -> Server:
             types.Tool(
                 name="patch",
                 description=(
-                    "Apply a block-level patch operation to a JSONHTL note. "
-                    "Prefer this over put() for targeted edits to avoid rewriting the full document. "
-                    "ops: append_block, insert_block, replace_block, delete_block, delete_blocks, patch_meta."
+                    "Apply a single block-level patch to a JSONHTL note. "
+                    "For multi-step edits, use get(include_block_ids=True) then batch() instead — "
+                    "index-based ops drift after each mutation. "
+                    "ID-based ops (supply block_id) are preferred: insert_before, insert_after, "
+                    "replace_block+block_id, delete_block+block_id. "
+                    "Index-based ops are fine for simple one-shot changes."
                 ),
                 inputSchema={
                     "type": "object",
@@ -360,26 +584,66 @@ def _make_tool_server(db_path: str) -> Server:
                         "key": {"type": "string", "description": "Note key"},
                         "op": {
                             "type": "string",
-                            "enum": ["append_block", "insert_block", "replace_block", "delete_block", "delete_blocks", "patch_meta"],
-                            "description": "Operation to perform",
+                            "enum": [
+                                "append_block", "insert_block", "replace_block",
+                                "delete_block", "delete_blocks", "patch_meta",
+                                "insert_before", "insert_after",
+                            ],
+                            "description": "Operation. ID-based: replace_block+block_id, delete_block+block_id, insert_before, insert_after. Index-based: append_block, insert_block, replace_block+index, delete_block+index, delete_blocks.",
+                        },
+                        "block_id": {
+                            "type": "string",
+                            "description": "Stable server-assigned block ID (from get(include_block_ids=True) or batch response). Required for insert_before/insert_after; preferred over index for replace_block/delete_block.",
                         },
                         "block": {
-                            "description": "JSONHTL block — required for append_block, insert_block, replace_block (may be a JSON-encoded string; handler unwraps automatically)",
+                            "description": "JSONHTL block — required for append_block, insert_block, replace_block, insert_before, insert_after (may be a JSON-encoded string; handler unwraps automatically)",
                         },
                         "index": {
                             "type": "integer",
-                            "description": "0-based block index — required for insert_block, replace_block, delete_block",
+                            "description": "0-based block index — for insert_block, replace_block, delete_block when not using block_id. Avoid for multi-step edits: drifts after each mutation.",
                         },
                         "indices": {
                             "type": "array",
                             "items": {"type": "integer"},
-                            "description": "List of 0-based block indices — required for delete_blocks. Order does not matter; duplicates are ignored.",
+                            "description": "List of 0-based block indices — required for delete_blocks.",
                         },
                         "fields": {
                             "description": "Metadata fields to update — required for patch_meta (title, version, updated, tags; not content). May be a JSON-encoded string; handler unwraps automatically.",
                         },
+                        "if_rev": {
+                            "type": "string",
+                            "description": "Optimistic concurrency token from get(include_block_ids=True). Returns 409 if current rev differs. Optional but recommended for coordinated edits.",
+                        },
                     },
                     "required": ["key", "op"],
+                },
+            ),
+            types.Tool(
+                name="batch",
+                description=(
+                    "Apply multiple patch operations atomically — all succeed or none are applied. "
+                    "Preferred for multi-step edits. "
+                    "Workflow: (1) get(key, include_block_ids=True) to obtain block IDs and rev; "
+                    "(2) batch(key, ops=[...], if_rev=rev) using block_id in each op to avoid index drift. "
+                    "Returns 409 if if_rev doesn't match (concurrent modification) — re-read and retry."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string", "description": "Note key"},
+                        "ops": {
+                            "description": (
+                                "List of patch ops to apply sequentially. "
+                                "Each op is a dict with 'op' and relevant params (block_id, block, fields, etc.). "
+                                "May be a JSON-encoded string; handler unwraps automatically."
+                            ),
+                        },
+                        "if_rev": {
+                            "type": "string",
+                            "description": "Optimistic concurrency token from get(include_block_ids=True). Strongly recommended. Returns 409 on mismatch.",
+                        },
+                    },
+                    "required": ["key", "ops"],
                 },
             ),
         ]
@@ -389,25 +653,35 @@ def _make_tool_server(db_path: str) -> Server:
         try:
             if name == "get":
                 key = arguments["key"]
-                raw, found = await db_get(db_path, key)
-                if not found:
-                    result = {"error": f"key not found: {key}"}
-                else:
+                include_block_ids = bool(arguments.get("include_block_ids", False))
+                if include_block_ids:
                     try:
-                        result = json.loads(raw)
-                    except json.JSONDecodeError:
-                        result = raw
+                        result = await db_patch(db_path, key, {"op": "get_with_block_ids"})
+                    except fastapi.HTTPException as e:
+                        result = {"error": e.detail, "status_code": e.status_code}
+                else:
+                    raw, found = await db_get(db_path, key)
+                    if not found:
+                        result = {"error": f"key not found: {key}"}
+                    else:
+                        try:
+                            result = json.loads(raw)
+                        except json.JSONDecodeError:
+                            result = raw
             elif name == "put":
                 key = arguments["key"]
                 value = arguments["value"]
-                # claude.ai MCP client serialises object values to strings; unwrap if needed
                 if isinstance(value, str):
                     try:
                         value = json.loads(value)
                     except json.JSONDecodeError:
                         pass
-                await db_put(db_path, key, json.dumps(value))
-                result = {"status": "ok"}
+                if_rev = arguments.get("if_rev") or None
+                try:
+                    await db_put(db_path, key, json.dumps(value), if_rev=if_rev)
+                    result = {"status": "ok"}
+                except fastapi.HTTPException as e:
+                    result = {"error": e.detail, "status_code": e.status_code}
             elif name == "delete":
                 key = arguments["key"]
                 deleted = await db_delete(db_path, key)
@@ -418,14 +692,32 @@ def _make_tool_server(db_path: str) -> Server:
                 result = {"items": await db_dump(db_path)}
             elif name == "patch":
                 key = arguments["key"]
-                body = {k: arguments[k] for k in ("op", "block", "index", "indices", "fields") if k in arguments}
-                # claude.ai MCP client serialises object values to strings; unwrap if needed
+                body = {k: arguments[k] for k in
+                        ("op", "block_id", "block", "index", "indices", "fields", "if_rev")
+                        if k in arguments}
                 for field in ("block", "fields"):
                     if isinstance(body.get(field), str):
                         try:
                             body[field] = json.loads(body[field])
                         except json.JSONDecodeError:
                             pass
+                try:
+                    result = await db_patch(db_path, key, body)
+                except fastapi.HTTPException as e:
+                    result = {"error": e.detail, "status_code": e.status_code}
+            elif name == "batch":
+                key = arguments["key"]
+                ops = arguments.get("ops", [])
+                if isinstance(ops, str):
+                    try:
+                        ops = json.loads(ops)
+                    except json.JSONDecodeError:
+                        return [types.TextContent(type="text", text=json.dumps(
+                            {"error": "'ops' could not be parsed as JSON"}))]
+                if_rev = arguments.get("if_rev") or None
+                body = {"op": "batch", "ops": ops}
+                if if_rev:
+                    body["if_rev"] = if_rev
                 try:
                     result = await db_patch(db_path, key, body)
                 except fastapi.HTTPException as e:

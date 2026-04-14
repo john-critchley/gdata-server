@@ -95,7 +95,7 @@ class TestAppendBlock:
     def test_appends_at_end(self, server_url):
         r = p(server_url, op="append_block", block={"para": ["Appended."]})
         assert r.status_code == 200
-        assert r.json() == {"status": "ok"}
+        assert r.json()["status"] == "ok"
         content = doc(server_url)["content"]
         assert len(content) == 4
         assert content[3] == {"para": ["Appended."]}
@@ -364,6 +364,246 @@ class TestPatchErrors:
             headers={"Content-Type": "application/json"}
         )
         assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# v2: sidecar / block IDs / rev / ETag
+# ---------------------------------------------------------------------------
+
+class TestSidecarAndBlockIds:
+
+    def test_get_with_block_ids_returns_structure(self, server_url):
+        r = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "get_with_block_ids"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["document"]["title"] == "Test"
+        assert body["rev"].startswith("r")
+        assert len(body["block_ids"]) == 3
+
+    def test_block_ids_stable_across_reads(self, server_url):
+        r1 = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "get_with_block_ids"}).json()
+        r2 = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "get_with_block_ids"}).json()
+        assert r1["block_ids"] == r2["block_ids"]
+        assert r1["rev"] == r2["rev"]
+
+    def test_rev_increments_after_patch(self, server_url):
+        r1 = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "get_with_block_ids"}).json()
+        p(server_url, op="append_block", block={"para": ["x"]})
+        r2 = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "get_with_block_ids"}).json()
+        assert r2["rev"] != r1["rev"]
+        # rev is monotonically incrementing
+        assert int(r2["rev"][1:]) > int(r1["rev"][1:])
+
+    def test_put_regenerates_block_ids(self, server_url):
+        r1 = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "get_with_block_ids"}).json()
+        requests.put(f"{server_url}/{TEST_KEY}", json=BASE_DOC)
+        r2 = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "get_with_block_ids"}).json()
+        # IDs are regenerated; rev is incremented
+        assert r2["block_ids"] != r1["block_ids"]
+        assert int(r2["rev"][1:]) > int(r1["rev"][1:])
+
+    def test_etag_header_on_get(self, server_url):
+        # Ensure sidecar exists
+        requests.post(f"{server_url}/{TEST_KEY}", json={"op": "get_with_block_ids"})
+        r = requests.get(f"{server_url}/{TEST_KEY}")
+        assert "ETag" in r.headers
+        etag = r.headers["ETag"]
+        assert etag.startswith('"r') and etag.endswith('"')
+
+    def test_patch_response_includes_rev(self, server_url):
+        r = p(server_url, op="append_block", block={"para": ["z"]})
+        assert r.status_code == 200
+        body = r.json()
+        assert "rev" in body
+        assert body["rev"].startswith("r")
+
+    def test_append_block_returns_inserted_block_id(self, server_url):
+        r = p(server_url, op="append_block", block={"para": ["z"]})
+        body = r.json()
+        assert "inserted_block_id" in body
+        assert len(body["inserted_block_id"]) == 6
+
+    def test_inserted_id_appears_in_block_ids(self, server_url):
+        r = p(server_url, op="append_block", block={"para": ["z"]})
+        new_id = r.json()["inserted_block_id"]
+        ids = requests.post(f"{server_url}/{TEST_KEY}",
+                            json={"op": "get_with_block_ids"}).json()["block_ids"]
+        assert new_id in ids
+
+
+# ---------------------------------------------------------------------------
+# v2: ID-based single ops
+# ---------------------------------------------------------------------------
+
+class TestIdBasedOps:
+
+    def _ids(self, server_url) -> dict:
+        r = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "get_with_block_ids"}).json()
+        return {"rev": r["rev"], "block_ids": r["block_ids"]}
+
+    def test_replace_block_by_id(self, server_url):
+        info = self._ids(server_url)
+        bid = info["block_ids"][1]
+        r = p(server_url, op="replace_block", block_id=bid, block={"para": ["Replaced."]})
+        assert r.status_code == 200
+        content = doc(server_url)["content"]
+        assert content[1] == {"para": ["Replaced."]}
+        # block_id at position 1 is unchanged (same slot)
+        ids_after = self._ids(server_url)["block_ids"]
+        assert ids_after[1] == bid
+
+    def test_delete_block_by_id(self, server_url):
+        info = self._ids(server_url)
+        bid = info["block_ids"][1]
+        r = p(server_url, op="delete_block", block_id=bid)
+        assert r.status_code == 200
+        content = doc(server_url)["content"]
+        assert len(content) == 2
+        # bid no longer present
+        ids_after = self._ids(server_url)["block_ids"]
+        assert bid not in ids_after
+
+    def test_insert_before(self, server_url):
+        info = self._ids(server_url)
+        bid = info["block_ids"][1]
+        r = p(server_url, op="insert_before", block_id=bid, block={"para": ["Before."]})
+        assert r.status_code == 200
+        content = doc(server_url)["content"]
+        assert content[1] == {"para": ["Before."]}
+        assert content[2] == {"para": ["First paragraph."]}
+        new_id = r.json()["inserted_block_id"]
+        ids_after = self._ids(server_url)["block_ids"]
+        assert ids_after[1] == new_id
+        assert ids_after[2] == bid
+
+    def test_insert_after(self, server_url):
+        info = self._ids(server_url)
+        bid = info["block_ids"][1]
+        r = p(server_url, op="insert_after", block_id=bid, block={"para": ["After."]})
+        assert r.status_code == 200
+        content = doc(server_url)["content"]
+        assert content[2] == {"para": ["After."]}
+        assert content[1] == {"para": ["First paragraph."]}
+        new_id = r.json()["inserted_block_id"]
+        ids_after = self._ids(server_url)["block_ids"]
+        assert ids_after[2] == new_id
+        assert ids_after[1] == bid
+
+    def test_replace_by_bad_id_returns_404(self, server_url):
+        r = p(server_url, op="replace_block", block_id="xxxxxx", block={"para": ["x"]})
+        assert r.status_code == 404
+
+    def test_delete_by_bad_id_returns_404(self, server_url):
+        r = p(server_url, op="delete_block", block_id="xxxxxx")
+        assert r.status_code == 404
+
+    def test_insert_before_bad_id_returns_404(self, server_url):
+        r = p(server_url, op="insert_before", block_id="xxxxxx", block={"para": ["x"]})
+        assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# v2: batch op
+# ---------------------------------------------------------------------------
+
+class TestBatchOp:
+
+    def _get(self, server_url) -> dict:
+        return requests.post(f"{server_url}/{TEST_KEY}",
+                             json={"op": "get_with_block_ids"}).json()
+
+    def test_batch_atomic_success(self, server_url):
+        info = self._get(server_url)
+        bid1 = info["block_ids"][1]
+        bid2 = info["block_ids"][2]
+        r = requests.post(f"{server_url}/{TEST_KEY}", json={
+            "op": "batch",
+            "if_rev": info["rev"],
+            "ops": [
+                {"op": "replace_block", "block_id": bid1, "block": {"para": ["New p1."]}},
+                {"op": "delete_block", "block_id": bid2},
+                {"op": "patch_meta", "fields": {"version": 9}},
+            ]
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "ok"
+        assert "rev" in body
+        assert body["inserted_block_ids"] == []
+        d = doc(server_url)
+        assert d["content"][1] == {"para": ["New p1."]}
+        assert len(d["content"]) == 2
+        assert d["version"] == 9
+
+    def test_batch_returns_inserted_block_ids(self, server_url):
+        r = requests.post(f"{server_url}/{TEST_KEY}", json={
+            "op": "batch",
+            "ops": [
+                {"op": "append_block", "block": {"para": ["A"]}},
+                {"op": "append_block", "block": {"para": ["B"]}},
+            ]
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body["inserted_block_ids"]) == 2
+
+    def test_batch_rollback_on_bad_op(self, server_url):
+        """If any op fails, no changes are committed."""
+        info = self._get(server_url)
+        r = requests.post(f"{server_url}/{TEST_KEY}", json={
+            "op": "batch",
+            "ops": [
+                {"op": "append_block", "block": {"para": ["ok"]}},
+                {"op": "replace_block", "block_id": "xxxxxx", "block": {"para": ["bad"]}},
+            ]
+        })
+        assert r.status_code == 404
+        # Content unchanged
+        assert len(doc(server_url)["content"]) == 3
+
+    def test_batch_if_rev_match(self, server_url):
+        info = self._get(server_url)
+        r = requests.post(f"{server_url}/{TEST_KEY}", json={
+            "op": "batch",
+            "if_rev": info["rev"],
+            "ops": [{"op": "patch_meta", "fields": {"title": "New"}}],
+        })
+        assert r.status_code == 200
+
+    def test_batch_if_rev_mismatch_returns_409(self, server_url):
+        r = requests.post(f"{server_url}/{TEST_KEY}", json={
+            "op": "batch",
+            "if_rev": "r999",
+            "ops": [{"op": "patch_meta", "fields": {"title": "x"}}],
+        })
+        assert r.status_code == 409
+
+    def test_batch_empty_ops_returns_400(self, server_url):
+        r = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "batch", "ops": []})
+        assert r.status_code == 400
+
+    def test_single_patch_if_rev_mismatch_returns_409(self, server_url):
+        r = p(server_url, op="append_block", block={"para": ["x"]},
+              if_rev="r999")
+        assert r.status_code == 409
+
+    def test_put_if_match_mismatch_returns_412(self, server_url):
+        r = requests.put(
+            f"{server_url}/{TEST_KEY}",
+            json=BASE_DOC,
+            headers={"If-Match": '"r999"'},
+        )
+        assert r.status_code == 412
+
+    def test_put_if_match_correct(self, server_url):
+        info = self._get(server_url)
+        r = requests.put(
+            f"{server_url}/{TEST_KEY}",
+            json=BASE_DOC,
+            headers={"If-Match": f'"{info["rev"]}"'},
+        )
+        assert r.status_code == 200
 
 
 # ---------------------------------------------------------------------------

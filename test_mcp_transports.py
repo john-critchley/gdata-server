@@ -156,7 +156,7 @@ class TestSSETransport:
                     await session.initialize()
                     result = await session.list_tools()
                     names = {t.name for t in result.tools}
-                    expected = {"get", "put", "delete", "keys", "dump", "patch"}
+                    expected = {"get", "put", "delete", "keys", "dump", "patch", "batch"}
                     assert expected <= names, f"Missing tools: {expected - names}"
                     extra = names - expected
                     if extra:
@@ -181,7 +181,7 @@ class TestSSETransport:
                     put_result = parse_tool_result(
                         (await session.call_tool("put", {"key": TEST_KEY_SSE, "value": payload})).content
                     )
-                    assert put_result == {"status": "ok"}
+                    assert put_result["status"] == "ok"
 
                     get_result = parse_tool_result(
                         (await session.call_tool("get", {"key": TEST_KEY_SSE})).content
@@ -246,7 +246,7 @@ class TestSSETransport:
                     put_result = parse_tool_result(
                         (await session.call_tool("put", {"key": TEST_KEY_SSE_PATCH, "value": doc})).content
                     )
-                    assert put_result == {"status": "ok"}
+                    assert put_result["status"] == "ok"
 
                     patch_result = parse_tool_result(
                         (await session.call_tool("patch", {
@@ -255,7 +255,7 @@ class TestSSETransport:
                             "block": {"para": ["Appended."]},
                         })).content
                     )
-                    assert patch_result == {"status": "ok"}, f"patch failed: {patch_result}"
+                    assert patch_result["status"] == "ok", f"patch failed: {patch_result}"
 
                     get_result = parse_tool_result(
                         (await session.call_tool("get", {"key": TEST_KEY_SSE_PATCH})).content
@@ -333,7 +333,7 @@ class TestStreamableHTTPTransport:
                     await session.initialize()
                     result = await session.list_tools()
                     names = {t.name for t in result.tools}
-                    expected = {"get", "put", "delete", "keys", "dump", "patch"}
+                    expected = {"get", "put", "delete", "keys", "dump", "patch", "batch"}
                     assert expected <= names, f"Missing tools: {expected - names}"
                     extra = names - expected
                     if extra:
@@ -357,7 +357,7 @@ class TestStreamableHTTPTransport:
                     put_result = parse_tool_result(
                         (await session.call_tool("put", {"key": TEST_KEY_STREAMABLE, "value": payload})).content
                     )
-                    assert put_result == {"status": "ok"}
+                    assert put_result["status"] == "ok"
 
                     get_result = parse_tool_result(
                         (await session.call_tool("get", {"key": TEST_KEY_STREAMABLE})).content
@@ -419,7 +419,7 @@ class TestStreamableHTTPTransport:
                     put_result = parse_tool_result(
                         (await session.call_tool("put", {"key": TEST_KEY_STREAMABLE_PATCH, "value": doc})).content
                     )
-                    assert put_result == {"status": "ok"}
+                    assert put_result["status"] == "ok"
 
                     patch_result = parse_tool_result(
                         (await session.call_tool("patch", {
@@ -428,7 +428,7 @@ class TestStreamableHTTPTransport:
                             "block": {"para": ["Appended."]},
                         })).content
                     )
-                    assert patch_result == {"status": "ok"}, f"patch failed: {patch_result}"
+                    assert patch_result["status"] == "ok", f"patch failed: {patch_result}"
 
                     get_result = parse_tool_result(
                         (await session.call_tool("get", {"key": TEST_KEY_STREAMABLE_PATCH})).content
@@ -567,7 +567,7 @@ class TestMCPPatchOps:
                     result = parse_tool_result(
                         (await s.call_tool("put", {"key": TEST_KEY_PATCH_OPS, "value": BASE_DOC})).content
                     )
-                    assert result == {"status": "ok"}
+                    assert result["status"] == "ok"
         run_async(go())
 
     def _get_doc(self, server_url):
@@ -606,7 +606,7 @@ class TestMCPPatchOps:
         try:
             result = self._patch(server_url, op="insert_block", index=1,
                                  block={"para": ["Inserted."]})
-            assert result == {"status": "ok"}
+            assert result["status"] == "ok"
             content = self._get_doc(server_url)["content"]
             assert len(content) == 4
             assert content[1] == {"para": ["Inserted."]}
@@ -619,7 +619,7 @@ class TestMCPPatchOps:
         try:
             result = self._patch(server_url, op="replace_block", index=1,
                                  block={"para": ["Replaced."]})
-            assert result == {"status": "ok"}
+            assert result["status"] == "ok"
             content = self._get_doc(server_url)["content"]
             assert len(content) == 3
             assert content[1] == {"para": ["Replaced."]}
@@ -630,7 +630,7 @@ class TestMCPPatchOps:
         self._put_doc(server_url)
         try:
             result = self._patch(server_url, op="delete_block", index=1)
-            assert result == {"status": "ok"}
+            assert result["status"] == "ok"
             content = self._get_doc(server_url)["content"]
             assert len(content) == 2
             assert content[1] == {"para": ["Second."]}
@@ -641,7 +641,7 @@ class TestMCPPatchOps:
         self._put_doc(server_url)
         try:
             result = self._patch(server_url, op="delete_blocks", indices=[0, 2])
-            assert result == {"status": "ok"}
+            assert result["status"] == "ok"
             content = self._get_doc(server_url)["content"]
             assert len(content) == 1
             assert content[0] == {"para": ["First."]}
@@ -653,7 +653,7 @@ class TestMCPPatchOps:
         try:
             result = self._patch(server_url, op="patch_meta",
                                  fields={"version": 3, "updated": "2026-04-14"})
-            assert result == {"status": "ok"}
+            assert result["status"] == "ok"
             d = self._get_doc(server_url)
             assert d["version"] == 3
             assert d["updated"] == "2026-04-14"
@@ -709,8 +709,150 @@ class TestMCPPatchOps:
                             })).content
                         )
             result = run_async(go())
-            assert result == {"status": "ok"}
+            assert result["status"] == "ok"
             content = self._get_doc(server_url)["content"]
             assert content[-1] == {"para": ["String-wrapped block."]}
         finally:
             self._delete_doc(server_url)
+
+
+# ---------------------------------------------------------------------------
+# MCP v2: get(include_block_ids), ID-based patch, batch
+# ---------------------------------------------------------------------------
+
+class TestMCPv2BlockIds:
+    """v2 operations via MCP streamable HTTP: stable IDs, batch, if_rev."""
+
+    def _client(self, server_url):
+        return streamablehttp_client(
+            f"{server_url}/mcp",
+            headers={"Authorization": f"Bearer {BEARER}"},
+        )
+
+    def _call(self, server_url, tool: str, args: dict):
+        async def go():
+            async with self._client(server_url) as (r, w, _):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    return parse_tool_result((await s.call_tool(tool, args)).content)
+        return run_async(go())
+
+    @pytest.fixture(autouse=True)
+    def fresh_doc(self, server_url):
+        self._call(server_url, "put", {"key": TEST_KEY_PATCH_OPS, "value": BASE_DOC})
+        yield
+        self._call(server_url, "delete", {"key": TEST_KEY_PATCH_OPS})
+
+    def test_get_with_block_ids(self, server_url):
+        result = self._call(server_url, "get",
+                            {"key": TEST_KEY_PATCH_OPS, "include_block_ids": True})
+        assert "document" in result
+        assert result["rev"].startswith("r")
+        assert len(result["block_ids"]) == 3
+
+    def test_rev_increments_after_patch(self, server_url):
+        r1 = self._call(server_url, "get",
+                        {"key": TEST_KEY_PATCH_OPS, "include_block_ids": True})
+        self._call(server_url, "patch",
+                   {"key": TEST_KEY_PATCH_OPS, "op": "append_block",
+                    "block": {"para": ["x"]}})
+        r2 = self._call(server_url, "get",
+                        {"key": TEST_KEY_PATCH_OPS, "include_block_ids": True})
+        assert int(r2["rev"][1:]) > int(r1["rev"][1:])
+
+    def test_id_based_replace(self, server_url):
+        info = self._call(server_url, "get",
+                          {"key": TEST_KEY_PATCH_OPS, "include_block_ids": True})
+        bid = info["block_ids"][1]
+        result = self._call(server_url, "patch", {
+            "key": TEST_KEY_PATCH_OPS,
+            "op": "replace_block",
+            "block_id": bid,
+            "block": {"para": ["Replaced."]},
+        })
+        assert result["status"] == "ok"
+        doc = self._call(server_url, "get", {"key": TEST_KEY_PATCH_OPS})
+        assert doc["content"][1] == {"para": ["Replaced."]}
+
+    def test_id_based_delete(self, server_url):
+        info = self._call(server_url, "get",
+                          {"key": TEST_KEY_PATCH_OPS, "include_block_ids": True})
+        bid = info["block_ids"][1]
+        self._call(server_url, "patch",
+                   {"key": TEST_KEY_PATCH_OPS, "op": "delete_block", "block_id": bid})
+        doc = self._call(server_url, "get", {"key": TEST_KEY_PATCH_OPS})
+        assert len(doc["content"]) == 2
+
+    def test_insert_before(self, server_url):
+        info = self._call(server_url, "get",
+                          {"key": TEST_KEY_PATCH_OPS, "include_block_ids": True})
+        bid = info["block_ids"][0]
+        result = self._call(server_url, "patch", {
+            "key": TEST_KEY_PATCH_OPS,
+            "op": "insert_before",
+            "block_id": bid,
+            "block": {"para": ["New first."]},
+        })
+        assert "inserted_block_id" in result
+        doc = self._call(server_url, "get", {"key": TEST_KEY_PATCH_OPS})
+        assert doc["content"][0] == {"para": ["New first."]}
+
+    def test_insert_after(self, server_url):
+        info = self._call(server_url, "get",
+                          {"key": TEST_KEY_PATCH_OPS, "include_block_ids": True})
+        bid = info["block_ids"][0]
+        result = self._call(server_url, "patch", {
+            "key": TEST_KEY_PATCH_OPS,
+            "op": "insert_after",
+            "block_id": bid,
+            "block": {"para": ["After first."]},
+        })
+        assert "inserted_block_id" in result
+        doc = self._call(server_url, "get", {"key": TEST_KEY_PATCH_OPS})
+        assert doc["content"][1] == {"para": ["After first."]}
+
+    def test_batch_atomic(self, server_url):
+        info = self._call(server_url, "get",
+                          {"key": TEST_KEY_PATCH_OPS, "include_block_ids": True})
+        bid1, bid2 = info["block_ids"][1], info["block_ids"][2]
+        result = self._call(server_url, "batch", {
+            "key": TEST_KEY_PATCH_OPS,
+            "if_rev": info["rev"],
+            "ops": [
+                {"op": "replace_block", "block_id": bid1, "block": {"para": ["New p1."]}},
+                {"op": "delete_block", "block_id": bid2},
+            ],
+        })
+        assert result["status"] == "ok"
+        assert result["inserted_block_ids"] == []
+        doc = self._call(server_url, "get", {"key": TEST_KEY_PATCH_OPS})
+        assert doc["content"][1] == {"para": ["New p1."]}
+        assert len(doc["content"]) == 2
+
+    def test_batch_if_rev_mismatch_returns_error(self, server_url):
+        result = self._call(server_url, "batch", {
+            "key": TEST_KEY_PATCH_OPS,
+            "if_rev": "r999",
+            "ops": [{"op": "patch_meta", "fields": {"title": "x"}}],
+        })
+        assert "error" in result
+        assert result["status_code"] == 409
+
+    def test_batch_ops_string_unwrapping(self, server_url):
+        """batch ops passed as JSON string are unwrapped."""
+        ops = [{"op": "patch_meta", "fields": {"title": "String-unwrapped"}}]
+        result = self._call(server_url, "batch", {
+            "key": TEST_KEY_PATCH_OPS,
+            "ops": json.dumps(ops),
+        })
+        assert result["status"] == "ok"
+        doc = self._call(server_url, "get", {"key": TEST_KEY_PATCH_OPS})
+        assert doc["title"] == "String-unwrapped"
+
+    def test_put_if_rev_mismatch_returns_error(self, server_url):
+        result = self._call(server_url, "put", {
+            "key": TEST_KEY_PATCH_OPS,
+            "value": BASE_DOC,
+            "if_rev": "r999",
+        })
+        assert "error" in result

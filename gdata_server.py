@@ -1,5 +1,8 @@
 #!/usr/bin/python
+import copy
 import os
+import random
+import string
 import sys
 import threading
 import yaml
@@ -11,6 +14,206 @@ import uvicorn
 from fastapi.responses import Response
 
 _patch_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# Sidecar storage — block IDs and internal revision token
+#
+# For each document key K, the sidecar is stored at "\x00" + K in the same
+# GDBM database.  Null-byte prefix cannot appear in URL-decoded path keys so
+# there is no collision risk.  Sidecar format:
+#   {"rev": "r5", "block_ids": ["a1b2c3", "d4e5f6", ...]}
+# ---------------------------------------------------------------------------
+
+_SIDECAR_PREFIX = '\x00'
+
+
+def _sidecar_key(key: str) -> str:
+    return _SIDECAR_PREFIX + key
+
+
+def _new_block_id() -> str:
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+
+
+def _increment_rev(rev: str) -> str:
+    return f'r{int(rev[1:]) + 1}'
+
+
+def _get_sidecar(db, key: str) -> dict | None:
+    sk = _sidecar_key(key)
+    if sk not in db:
+        return None
+    try:
+        return json.loads(db[sk])
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+def _save_sidecar(db, key: str, sidecar: dict):
+    db[_sidecar_key(key)] = json.dumps(sidecar)
+
+
+def _get_or_create_sidecar(db, key: str, content: list) -> dict:
+    """Return existing sidecar or create one.  Regenerates block_ids if count mismatches."""
+    sidecar = _get_sidecar(db, key)
+    if sidecar is None:
+        sidecar = {'rev': 'r1', 'block_ids': [_new_block_id() for _ in content]}
+        _save_sidecar(db, key, sidecar)
+    elif len(sidecar.get('block_ids', [])) != len(content):
+        sidecar['block_ids'] = [_new_block_id() for _ in content]
+        _save_sidecar(db, key, sidecar)
+    return sidecar
+
+
+# ---------------------------------------------------------------------------
+# Pure-logic patch helper — no DB access
+# ---------------------------------------------------------------------------
+
+def _apply_op(op_body: dict, doc: dict, block_ids: list) -> dict:
+    """Apply one patch op to doc and block_ids in-place.
+
+    Returns {'status': 'ok', ...}.  May include 'inserted_block_id'.
+    Raises fastapi.HTTPException on any validation error.
+    Does NOT write to the database.
+    """
+    op = op_body.get('op')
+
+    if op == 'patch_meta':
+        fields = op_body.get('fields')
+        if not isinstance(fields, dict):
+            raise fastapi.HTTPException(status_code=400, detail="'fields' must be an object")
+        if 'content' in fields:
+            raise fastapi.HTTPException(status_code=400, detail="'content' cannot be updated via patch_meta")
+        doc.update(fields)
+        return {'status': 'ok'}
+
+    content = doc.get('content')
+    if content is None:
+        raise fastapi.HTTPException(status_code=409, detail="document has no 'content' key")
+    if not isinstance(content, list):
+        raise fastapi.HTTPException(
+            status_code=400,
+            detail="'content' is not a list; cannot patch block-level (PUT the full document first)"
+        )
+
+    block_id = op_body.get('block_id')
+
+    # --- ID-based insert ops (always require block_id) ---
+    if op == 'insert_before':
+        if block_id is None:
+            raise fastapi.HTTPException(status_code=400, detail="'block_id' is required for insert_before")
+        block = op_body.get('block')
+        if block is None:
+            raise fastapi.HTTPException(status_code=400, detail="'block' is required for insert_before")
+        try:
+            idx = block_ids.index(block_id)
+        except ValueError:
+            raise fastapi.HTTPException(status_code=404, detail=f"block_id not found: {block_id!r}")
+        new_id = _new_block_id()
+        content.insert(idx, block)
+        block_ids.insert(idx, new_id)
+        return {'status': 'ok', 'inserted_block_id': new_id}
+
+    if op == 'insert_after':
+        if block_id is None:
+            raise fastapi.HTTPException(status_code=400, detail="'block_id' is required for insert_after")
+        block = op_body.get('block')
+        if block is None:
+            raise fastapi.HTTPException(status_code=400, detail="'block' is required for insert_after")
+        try:
+            idx = block_ids.index(block_id)
+        except ValueError:
+            raise fastapi.HTTPException(status_code=404, detail=f"block_id not found: {block_id!r}")
+        new_id = _new_block_id()
+        content.insert(idx + 1, block)
+        block_ids.insert(idx + 1, new_id)
+        return {'status': 'ok', 'inserted_block_id': new_id}
+
+    # --- ID-based variants of replace/delete (block_id takes precedence over index) ---
+    if op == 'replace_block' and block_id is not None:
+        block = op_body.get('block')
+        if block is None:
+            raise fastapi.HTTPException(status_code=400, detail="'block' is required for replace_block")
+        try:
+            idx = block_ids.index(block_id)
+        except ValueError:
+            raise fastapi.HTTPException(status_code=404, detail=f"block_id not found: {block_id!r}")
+        content[idx] = block
+        return {'status': 'ok'}
+
+    if op == 'delete_block' and block_id is not None:
+        try:
+            idx = block_ids.index(block_id)
+        except ValueError:
+            raise fastapi.HTTPException(status_code=404, detail=f"block_id not found: {block_id!r}")
+        content.pop(idx)
+        block_ids.pop(idx)
+        return {'status': 'ok'}
+
+    # --- Index-based ops ---
+    if op == 'append_block':
+        block = op_body.get('block')
+        if block is None:
+            raise fastapi.HTTPException(status_code=400, detail="'block' is required for append_block")
+        new_id = _new_block_id()
+        content.append(block)
+        block_ids.append(new_id)
+        return {'status': 'ok', 'inserted_block_id': new_id}
+
+    if op == 'delete_blocks':
+        indices = op_body.get('indices')
+        if not isinstance(indices, list) or not indices:
+            raise fastapi.HTTPException(status_code=400, detail="'indices' must be a non-empty list for delete_blocks")
+        if not all(isinstance(i, int) and i >= 0 for i in indices):
+            raise fastapi.HTTPException(status_code=400, detail="all indices must be non-negative integers")
+        max_index = len(content) - 1
+        out_of_range = [i for i in indices if i > max_index]
+        if out_of_range:
+            raise fastapi.HTTPException(
+                status_code=400,
+                detail=f"indices out of range: {out_of_range} (content has {len(content)} block(s))"
+            )
+        for i in sorted(set(indices), reverse=True):
+            content.pop(i)
+            block_ids.pop(i)
+        return {'status': 'ok'}
+
+    if op in ('insert_block', 'replace_block', 'delete_block'):
+        index = op_body.get('index')
+        if index is None:
+            raise fastapi.HTTPException(status_code=400, detail=f"'index' is required for {op}")
+        if not isinstance(index, int) or index < 0:
+            raise fastapi.HTTPException(status_code=400, detail="'index' must be a non-negative integer")
+        max_index = len(content) if op == 'insert_block' else len(content) - 1
+        if index > max_index:
+            raise fastapi.HTTPException(
+                status_code=400,
+                detail=f"index {index} out of range (content has {len(content)} block(s))"
+            )
+        if op == 'delete_block':
+            content.pop(index)
+            block_ids.pop(index)
+            return {'status': 'ok'}
+        block = op_body.get('block')
+        if block is None:
+            raise fastapi.HTTPException(status_code=400, detail=f"'block' is required for {op}")
+        if op == 'insert_block':
+            new_id = _new_block_id()
+            content.insert(index, block)
+            block_ids.insert(index, new_id)
+            return {'status': 'ok', 'inserted_block_id': new_id}
+        else:  # replace_block by index
+            content[index] = block
+            return {'status': 'ok'}
+
+    raise fastapi.HTTPException(
+        status_code=400,
+        detail=(
+            f"unknown op: {op!r}. Supported: append_block, insert_block, replace_block, "
+            "delete_block, delete_blocks, patch_meta, insert_before, insert_after, "
+            "batch, get_with_block_ids"
+        )
+    )
 
 # Force import of gdata from current directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -76,25 +279,54 @@ def _decode_key(path: str) -> str:
 
 
 def _list_keys() -> list[str]:
-    return sorted(list(get_db().keys()))
+    return sorted(k for k in get_db().keys() if not k.startswith(_SIDECAR_PREFIX))
 
 
 def handle_GET_request(path: str, body: dict) -> Response:
-    """Return raw JSON string from database."""
+    """Return raw JSON string from database, with ETag header if sidecar exists."""
     key = _decode_key(path)
     db = get_db()
     if key not in db:
         raise fastapi.HTTPException(status_code=404, detail=f"key not found: {key}")
-    # db[key] returns a JSON string - return it directly
     json_string = db[key]
-    return Response(content=json_string, media_type="application/json")
+    headers = {}
+    sidecar = _get_sidecar(db, key)
+    if sidecar:
+        headers['ETag'] = f'"{sidecar["rev"]}"'
+    return Response(content=json_string, media_type="application/json", headers=headers)
 
 
-def handle_PUT_request(path: str, body_text: str) -> dict:
-    """Store raw JSON string in database."""
+def handle_PUT_request(path: str, body_text: str, if_match: str | None = None) -> dict:
+    """Store raw JSON string in database and regenerate sidecar."""
     key = _decode_key(path)
-    # Store the JSON string directly (no parsing needed)
-    get_db()[key] = body_text
+    with _patch_lock:
+        db = get_db()
+        old_sidecar = _get_sidecar(db, key)
+
+        if if_match is not None:
+            current_rev = old_sidecar['rev'] if old_sidecar else None
+            if current_rev != if_match:
+                raise fastapi.HTTPException(
+                    status_code=412,
+                    detail=f"revision mismatch: expected {if_match!r}, current rev is {current_rev!r}"
+                )
+
+        db[key] = body_text
+
+        try:
+            doc = json.loads(body_text)
+            content = doc.get('content', []) if isinstance(doc, dict) else []
+            if not isinstance(content, list):
+                content = []
+        except json.JSONDecodeError:
+            content = []
+
+        new_sidecar = {
+            'rev': _increment_rev(old_sidecar['rev'] if old_sidecar else 'r0'),
+            'block_ids': [_new_block_id() for _ in content],
+        }
+        _save_sidecar(db, key, new_sidecar)
+
     return {'status': 'ok'}
 
 
@@ -106,21 +338,27 @@ def handle_HEAD_request(path: str, body: dict) -> Response:
 
 
 def handle_DELETE_request(path: str, body: dict) -> dict:
-    """Delete a key from database."""
+    """Delete a key and its sidecar from database."""
     key = _decode_key(path)
     db = get_db()
     if key not in db:
         raise fastapi.HTTPException(status_code=404, detail=f"key not found: {key}")
     del db[key]
+    sk = _sidecar_key(key)
+    if sk in db:
+        del db[sk]
     return {'status': 'deleted'}
 
 
-def handle_PATCH_DOC_request(path: str, body: dict) -> dict:
+def handle_PATCH_DOC_request(path: str, body: dict, if_match: str | None = None) -> dict:
     """
     POST /{key} — block-level patch operations on a JSONHTL document.
 
-    Supported ops: append_block, insert_block, replace_block, delete_block, patch_meta.
-    Read-modify-write is atomic under _patch_lock.
+    Supported ops: append_block, insert_block, replace_block, delete_block, delete_blocks,
+    patch_meta, insert_before, insert_after, batch, get_with_block_ids.
+
+    if_match: value of If-Match header (rev token, e.g. "r5"), stripped of quotes.
+    body.get('if_rev') takes precedence over if_match.
     """
     key = _decode_key(path)
     db = get_db()
@@ -139,81 +377,72 @@ def handle_PATCH_DOC_request(path: str, body: dict) -> dict:
 
         op = body.get('op')
 
-        if op == 'patch_meta':
-            fields = body.get('fields')
-            if not isinstance(fields, dict):
-                raise fastapi.HTTPException(status_code=400, detail="'fields' must be an object")
-            if 'content' in fields:
-                raise fastapi.HTTPException(status_code=400, detail="'content' cannot be updated via patch_meta")
-            doc.update(fields)
-            db[key] = json.dumps(doc)
-            return {'status': 'ok'}
+        # --- Read-only op ---
+        if op == 'get_with_block_ids':
+            content = doc.get('content')
+            blocks = content if isinstance(content, list) else []
+            sidecar = _get_or_create_sidecar(db, key, blocks)
+            return {
+                'document': doc,
+                'rev': sidecar['rev'],
+                'block_ids': sidecar['block_ids'],
+            }
 
+        # --- Concurrency guard (if_rev in body takes precedence over If-Match header) ---
+        if_rev = body.get('if_rev') or if_match
+        if if_rev is not None:
+            sidecar = _get_sidecar(db, key)
+            current_rev = sidecar['rev'] if sidecar else None
+            if current_rev != if_rev:
+                raise fastapi.HTTPException(
+                    status_code=409,
+                    detail=f"revision mismatch: expected {if_rev!r}, current rev is {current_rev!r}"
+                )
+
+        # --- Load/create sidecar for all mutating ops ---
         content = doc.get('content')
-        if content is None:
-            raise fastapi.HTTPException(status_code=409, detail="document has no 'content' key")
-        if not isinstance(content, list):
-            raise fastapi.HTTPException(
-                status_code=400,
-                detail="'content' is not a list; cannot patch block-level (PUT the full document first)"
-            )
+        blocks = content if isinstance(content, list) else []
+        sidecar = _get_or_create_sidecar(db, key, blocks)
+        block_ids = sidecar['block_ids']
 
-        if op == 'append_block':
-            block = body.get('block')
-            if block is None:
-                raise fastapi.HTTPException(status_code=400, detail="'block' is required for append_block")
-            content.append(block)
-            db[key] = json.dumps(doc)
-            return {'status': 'ok'}
+        # --- Batch op: atomic all-or-nothing ---
+        if op == 'batch':
+            ops = body.get('ops')
+            if isinstance(ops, str):
+                try:
+                    ops = json.loads(ops)
+                except json.JSONDecodeError:
+                    raise fastapi.HTTPException(status_code=400, detail="'ops' could not be parsed as JSON")
+            if not isinstance(ops, list) or not ops:
+                raise fastapi.HTTPException(status_code=400, detail="'ops' must be a non-empty list")
 
-        if op == 'delete_blocks':
-            indices = body.get('indices')
-            if not isinstance(indices, list) or not indices:
-                raise fastapi.HTTPException(status_code=400, detail="'indices' must be a non-empty list for delete_blocks")
-            if not all(isinstance(i, int) and i >= 0 for i in indices):
-                raise fastapi.HTTPException(status_code=400, detail="all indices must be non-negative integers")
-            max_index = len(content) - 1
-            out_of_range = [i for i in indices if i > max_index]
-            if out_of_range:
-                raise fastapi.HTTPException(
-                    status_code=400,
-                    detail=f"indices out of range: {out_of_range} (content has {len(content)} block(s))"
-                )
-            for i in sorted(set(indices), reverse=True):
-                content.pop(i)
-            db[key] = json.dumps(doc)
-            return {'status': 'ok'}
+            # Work on deep copies so any failure leaves the DB unchanged
+            doc_work = copy.deepcopy(doc)
+            block_ids_work = list(block_ids)
+            inserted_block_ids = []
+            for op_body in ops:
+                if not isinstance(op_body, dict):
+                    raise fastapi.HTTPException(status_code=400, detail="each op in batch must be a JSON object")
+                r = _apply_op(op_body, doc_work, block_ids_work)
+                if 'inserted_block_id' in r:
+                    inserted_block_ids.append(r['inserted_block_id'])
 
-        if op in ('insert_block', 'replace_block', 'delete_block'):
-            index = body.get('index')
-            if index is None:
-                raise fastapi.HTTPException(status_code=400, detail=f"'index' is required for {op}")
-            if not isinstance(index, int) or index < 0:
-                raise fastapi.HTTPException(status_code=400, detail="'index' must be a non-negative integer")
-            max_index = len(content) if op == 'insert_block' else len(content) - 1
-            if index > max_index:
-                raise fastapi.HTTPException(
-                    status_code=400,
-                    detail=f"index {index} out of range (content has {len(content)} block(s))"
-                )
-            if op == 'delete_block':
-                content.pop(index)
-                db[key] = json.dumps(doc)
-                return {'status': 'ok'}
-            block = body.get('block')
-            if block is None:
-                raise fastapi.HTTPException(status_code=400, detail=f"'block' is required for {op}")
-            if op == 'insert_block':
-                content.insert(index, block)
-            else:
-                content[index] = block
-            db[key] = json.dumps(doc)
-            return {'status': 'ok'}
+            new_rev = _increment_rev(sidecar['rev'])
+            sidecar['rev'] = new_rev
+            sidecar['block_ids'] = block_ids_work
+            db[key] = json.dumps(doc_work)
+            _save_sidecar(db, key, sidecar)
+            return {'status': 'ok', 'rev': new_rev, 'inserted_block_ids': inserted_block_ids}
 
-        raise fastapi.HTTPException(
-            status_code=400,
-            detail=f"unknown op: {op!r}. Supported: append_block, insert_block, replace_block, delete_block, delete_blocks, patch_meta"
-        )
+        # --- Single op ---
+        result = _apply_op(body, doc, block_ids)
+        new_rev = _increment_rev(sidecar['rev'])
+        sidecar['rev'] = new_rev
+        sidecar['block_ids'] = block_ids
+        db[key] = json.dumps(doc)
+        _save_sidecar(db, key, sidecar)
+        result['rev'] = new_rev
+        return result
 
 
 def handle_POST_request(path: str, body: dict) -> dict:
@@ -392,10 +621,9 @@ def get_item(path: str):
 
 @app.put("/{path:path}")
 async def put_item(path: str, request: fastapi.Request):
-    # Get raw body as text (JSON string)
-    body_text = await request.body()
-    body_text = body_text.decode('utf-8')
-    return handle_PUT_request(f"/{path}", body_text)
+    body_text = (await request.body()).decode('utf-8')
+    if_match = request.headers.get('If-Match', '').strip('"') or None
+    return handle_PUT_request(f"/{path}", body_text, if_match=if_match)
 
 
 @app.delete("/{path:path}")
@@ -414,5 +642,6 @@ def post_op(body: dict):
 
 
 @app.post("/{path:path}")
-def post_patch(path: str, body: dict):
-    return handle_PATCH_DOC_request(f"/{path}", body)
+def post_patch(path: str, body: dict, request: fastapi.Request):
+    if_match = request.headers.get('If-Match', '').strip('"') or None
+    return handle_PATCH_DOC_request(f"/{path}", body, if_match=if_match)
