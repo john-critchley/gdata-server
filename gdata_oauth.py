@@ -251,6 +251,15 @@ def _render_form(client_id, redirect_uri, state,
     )
 
 
+@router.get("/.well-known/oauth-protected-resource")
+@router.get("/.well-known/oauth-protected-resource/{path:path}")
+async def protected_resource_metadata(path: str = ""):
+    return {
+        "resource":              f"{ISSUER}/mcp",
+        "authorization_servers": [ISSUER],
+    }
+
+
 @router.get("/.well-known/oauth-authorization-server")
 async def oauth_metadata():
     return {

@@ -1,0 +1,6 @@
+notes_url: http://127.0.0.1:18021
+html_base_url: http://127.0.0.1/notes
+control_host: 127.0.0.1
+control_tcp_port: 18711
+control_udp_port: 18712
+control_token: demo-token

@@ -1,0 +1,25 @@
+# Example settings for notes_browser.py
+# Default path searched at runtime: ~/.notes_browser.yaml
+
+# Data source (choose one or use CLI args)
+notes_url: http://127.0.0.1:8021
+# gdbm_file: .agent_notes.gdbm
+
+# Base URL used by "Copy Link As URL"
+# Precedence: --html-base-url > NOTES_HTML_BASE_URL > this file > fallback
+html_base_url: http://127.0.0.1/notes
+
+# Control interface (JSON-RPC 2.0)
+# Per-transport enable/disable
+control_tcp_enabled: false
+control_udp_enabled: false
+control_unix_enabled: false
+
+control_host: 127.0.0.1
+control_tcp_port: 8711
+control_udp_port: 8711
+# Optional Unix domain stream socket path (same JSON-RPC protocol as TCP)
+# control_unix_socket: /tmp/notes-browser.sock
+
+# Optional shared secret token required in params.token
+# control_token: change-me

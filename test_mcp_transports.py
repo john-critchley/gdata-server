@@ -156,7 +156,7 @@ class TestSSETransport:
                     await session.initialize()
                     result = await session.list_tools()
                     names = {t.name for t in result.tools}
-                    expected = {"get", "put", "delete", "keys", "dump", "patch", "batch"}
+                    expected = {"get", "put", "delete", "keys", "patch", "batch"}
                     assert expected <= names, f"Missing tools: {expected - names}"
                     extra = names - expected
                     if extra:
@@ -333,7 +333,7 @@ class TestStreamableHTTPTransport:
                     await session.initialize()
                     result = await session.list_tools()
                     names = {t.name for t in result.tools}
-                    expected = {"get", "put", "delete", "keys", "dump", "patch", "batch"}
+                    expected = {"get", "put", "delete", "keys", "patch", "batch"}
                     assert expected <= names, f"Missing tools: {expected - names}"
                     extra = names - expected
                     if extra:

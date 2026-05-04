@@ -401,13 +401,6 @@ expect_http 200
 expect_json_list_contains "keys" "${KEY}"
 test_end
 
-# 6) POST dump includes KEY
-test_begin "POST dump"
-http_request POST / '{"op":"dump"}'
-expect_http 200
-expect_json_path_contains_key "items" "${KEY}"
-test_end
-
 # 7) DELETE key
 test_begin "DELETE"
 http_request DELETE "/${KEY}"
@@ -460,13 +453,6 @@ test_begin "POST keys (includes decoded key)"
 http_request POST / '{"op":"keys"}'
 expect_http 200
 expect_json_list_contains "keys" "${KEY_URL_DEC}"
-test_end
-
-# 13) POST dump should include decoded key
-test_begin "POST dump (includes decoded key)"
-http_request POST / '{"op":"dump"}'
-expect_http 200
-expect_json_path_contains_key "items" "${KEY_URL_DEC}"
 test_end
 
 # 14) POST unknown op should return error + supported ops

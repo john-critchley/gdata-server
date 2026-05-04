@@ -81,6 +81,8 @@ def load_browser_config(args):
         'gdbm_file': None,
         'html_base_url': 'http://127.0.0.1/notes',
         'html_path': '/notes',
+        'render_font_family': "'Courier New', Courier, monospace",
+        'render_font_size_pt': 10,
         'control_tcp_enabled': False,
         'control_udp_enabled': False,
         'control_unix_enabled': False,
@@ -101,6 +103,8 @@ def load_browser_config(args):
         'gdbm_file': 'GDBM_FILE',
         'html_base_url': 'NOTES_HTML_BASE_URL',
         'html_path': 'NOTES_HTML_PATH',
+        'render_font_family': 'NOTES_BROWSER_RENDER_FONT_FAMILY',
+        'render_font_size_pt': 'NOTES_BROWSER_RENDER_FONT_SIZE_PT',
         'control_tcp_enabled': 'NOTES_BROWSER_CONTROL_TCP_ENABLED',
         'control_udp_enabled': 'NOTES_BROWSER_CONTROL_UDP_ENABLED',
         'control_unix_enabled': 'NOTES_BROWSER_CONTROL_UNIX_ENABLED',
@@ -123,6 +127,10 @@ def load_browser_config(args):
         cfg['html_base_url'] = args.html_base_url
     if args.html_path is not None:
         cfg['html_path'] = args.html_path
+    if args.render_font_family is not None:
+        cfg['render_font_family'] = args.render_font_family
+    if args.render_font_size_pt is not None:
+        cfg['render_font_size_pt'] = args.render_font_size_pt
     if args.control_host is not None:
         cfg['control_host'] = args.control_host
     if args.control_tcp_port is not None:
@@ -146,6 +154,10 @@ def load_browser_config(args):
     cfg['control_unix_enabled'] = _to_bool(cfg['control_unix_enabled'])
     cfg['control_tcp_port'] = int(cfg['control_tcp_port'])
     cfg['control_udp_port'] = int(cfg['control_udp_port'])
+    cfg['render_font_family'] = str(cfg.get('render_font_family') or "'Courier New', Courier, monospace")
+    cfg['render_font_size_pt'] = int(cfg.get('render_font_size_pt') or 10)
+    if cfg['render_font_size_pt'] <= 0:
+        cfg['render_font_size_pt'] = 10
     cfg['control_unix_socket'] = str(cfg.get('control_unix_socket') or '')
     cfg['control_token'] = str(cfg['control_token'] or '')
 
@@ -257,70 +269,60 @@ class NotesDataSource:
 class NotesHTMLRenderer:
     """Convert JSONHTL note data to HTML for display."""
 
-    def __init__(self):
+    def __init__(self, font_family="'Courier New', Courier, monospace", font_size_pt=10):
         self.zoom_percent = 100
         self.selection_range = None
         self.use_selection_markup = False
+        self.font_family = str(font_family)
+        self.font_size_pt = int(font_size_pt) if int(font_size_pt) > 0 else 10
+
+    def _base_text_style(self):
+        # Match terminal screenshot typography for OCR parity.
+        return f"font-family: {self.font_family}; font-size: {self.font_size_pt}pt; margin: 20px;"
     
     def render(self, key, data):
         """Render note data as HTML."""
         if data is None:
             return self._error_html(f"Document '{key}' not found")
         
-        html = ['<html><body style="font-family: sans-serif; margin: 20px;">']
-        
-        # Add page title
-        html.append(f'<h1>Page: {key or "ROOT"}</h1>')
-        html.append('<hr/>')
-        
+        html = [f'<html><body style="{self._base_text_style()}">']
+
         if isinstance(data, dict):
-            # JSONHTL document - look for title and content
-            metadata = {}
-            
-            # Render title if present
-            if 'title' in data:
-                html.append(f'<h2>{self._escape(str(data["title"]))}</h2>')
-            
-            # Render content array (JSONHTL blocks)
+            has_title = 'title' in data
+            if has_title:
+                html.append(f'<h1>{self._escape(str(data["title"]))}</h1>')
+
             if 'content' in data and isinstance(data['content'], list):
-                html.append(self._render_jsonhtl_blocks(data['content']))
-            
-            # Collect metadata fields
-            for field, value in data.items():
-                if field in ['title', 'content']:
-                    continue
-                metadata[field] = value
-            
-            # Add metadata section if exists
-            if metadata:
-                html.append('<hr/>')
-                html.append('<h3 style="color: #666;">Metadata</h3>')
-                html.append('<table style="border-collapse: collapse; width: 100%; max-width: 600px;">')
-                for field, value in metadata.items():
-                    html.append('<tr style="border-bottom: 1px solid #ddd;">')
-                    html.append(f'<td style="padding: 5px; font-weight: bold; width: 150px;">{self._escape(field)}</td>')
-                    val_str = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
-                    html.append(f'<td style="padding: 5px;"><code>{self._escape(val_str)}</code></td>')
-                    html.append('</tr>')
-                html.append('</table>')
-        
+                html.append(self._render_jsonhtl_blocks(data['content'], skip_h1=has_title))
+            elif 'content' in data and isinstance(data['content'], str):
+                html.append(f'<p>{self._escape(data["content"])}</p>')
+
+            meta_pairs = [(k, v) for k, v in data.items() if k not in ('title', 'content')]
+            if meta_pairs:
+                parts = ' &nbsp;·&nbsp; '.join(
+                    f'<b>{self._escape(str(k))}</b> {self._escape(str(v))}'
+                    for k, v in meta_pairs
+                )
+                html.append(
+                    f'<p style="font-size: 0.8em; color: #888; margin-top: 2em; '
+                    f'border-top: 1px solid #ddd; padding-top: 0.5em;">{parts}</p>'
+                )
         elif isinstance(data, list):
-            # Raw list - render as JSONHTL blocks
             html.append(self._render_jsonhtl_blocks(data))
-        
         else:
-            # Simple value
             html.append(f'<p>{self._escape(str(data))}</p>')
         
         html.append('</body></html>')
         return '\n'.join(html)
     
-    def _render_jsonhtl_blocks(self, blocks):
+    def _render_jsonhtl_blocks(self, blocks, skip_h1=False):
         """Render a list of JSONHTL block elements."""
         html = []
         for idx, block in enumerate(blocks):
             if isinstance(block, dict):
                 if 'heading' in block:
+                    if skip_h1 and isinstance(block['heading'], dict) and block['heading'].get('level') == 1:
+                        continue
                     html.append(self._render_heading(block['heading'], idx))
                 elif 'para' in block:
                     html.append(self._render_para(block['para'], idx))
@@ -483,25 +485,28 @@ class NotesHTMLRenderer:
             return f'<p>{self._escape(str(table))}</p>'
         columns = table.get('columns', [])
         rows = table.get('rows', [])
-        html = ['<table style="border-collapse: collapse; width: auto; margin: 8px 0;">']
-        # Header row
+        html = [
+            f'<table style="border-collapse: collapse; width: 100%; margin: 8px 0; '
+            f'font-family: {self.font_family}; font-size: {self.font_size_pt}pt;">'
+        ]
+        # Header row — dark background, white text (matches .bks th style)
         if columns:
             html.append('<tr>')
             for col in columns:
                 html.append(
-                    f'<th style="border: 1px solid #999; padding: 6px 12px; '
-                    f'background: #e8e8e8; text-align: left;">'
-                    f'{self._escape(str(col))}</th>'
+                    f'<th bgcolor="#222222" style="border: 1px solid #ddd; padding: 8px; text-align: left;">'
+                    f'<font color="#ffffff"><b>{self._escape(str(col))}</b></font></th>'
                 )
             html.append('</tr>')
-        # Data rows
-        for row in rows:
+        # Data rows — alternating stripe on even rows (Python-side, no nth-child needed)
+        for i, row in enumerate(rows):
+            bg_attr = ' bgcolor="#f9f9f9"' if i % 2 == 1 else ''
             html.append('<tr>')
             cells = row if isinstance(row, list) else [row]
             for cell in cells:
                 html.append(
-                    f'<td style="border: 1px solid #ccc; padding: 6px 12px;">'
-                    f'{self._escape(str(cell))}</td>'
+                    f'<td{bg_attr} style="border: 1px solid #ddd; padding: 8px;">'
+                    f'{self._render_markup_text(str(cell))}</td>'
                 )
             html.append('</tr>')
         html.append('</table>')
@@ -540,7 +545,7 @@ class NotesHTMLRenderer:
     
     def _error_html(self, message):
         """Render an error message."""
-        return f'''<html><body style="font-family: sans-serif; margin: 20px;">
+        return f'''<html><body style="{self._base_text_style()}">
 <h2 style="color: red;">Error</h2>
 <p>{self._escape(message)}</p>
 </body></html>'''
@@ -594,13 +599,17 @@ class NotesBrowser(wx.Frame):
             self.SetIcon(icon)
         
         self.data_source = data_source
-        self.renderer = NotesHTMLRenderer()
         self.config = config
+        self.renderer = NotesHTMLRenderer(
+            font_family=self.config.get('render_font_family', "'Courier New', Courier, monospace"),
+            font_size_pt=self.config.get('render_font_size_pt', 10),
+        )
         self.history = []
         self.history_position = -1  # Start before any history
         self.current_page = None  # None so first navigation adds to history
         self.selection_range = None
         self.last_selection_mode = 'none'
+        self._page_meta_text = ''
         self.control_server = None
         
         # Detect background brightness for text colour choices
@@ -745,7 +754,8 @@ class NotesBrowser(wx.Frame):
                 )
                 self._flush_ui_updates()
                 return
-            self.selection_info.SetLabel("Selection: (none)")
+            label = self._page_meta_text if self._page_meta_text else 'Selection: (none)'
+            self.selection_info.SetLabel(label)
             self._flush_ui_updates()
             return
 
@@ -1412,6 +1422,12 @@ class NotesBrowser(wx.Frame):
         
         # Load HTML into viewer
         self.html.SetPage(html)
+        # Store metadata for status line display
+        self._page_meta_text = ''
+        if isinstance(data, dict):
+            pairs = [(k, str(v)) for k, v in data.items() if k not in ('title', 'content')]
+            if pairs:
+                self._page_meta_text = '  ·  '.join(f'{k}: {v}' for k, v in pairs)
         self._update_selection_indicator()
         self._set_status(f"Loaded page: {page_key or '(root)'}")
     
@@ -1506,7 +1522,8 @@ class NotesBrowser(wx.Frame):
         self.renderer.zoom_percent = max(1, int(zoom))
         html_font_size = max(1, round(self.BASE_HTML_FONT * self.renderer.zoom_percent / 100.0))
         # Use HtmlWindow native font scaling (CSS font-size on body is not reliable here).
-        self.html.SetStandardFonts(html_font_size)
+        # SetFonts(normal_face, fixed_face, sizes) — use Courier for fixed-width (pre/code) blocks.
+        self.html.SetFonts("", "Courier", [html_font_size] * 7)
         self._navigate_to(self._current_page_key(), add_to_history=False)
         self._set_status(f"Zoom: {self.renderer.zoom_percent}% (font {html_font_size})")
 
@@ -2131,6 +2148,17 @@ def main():
     parser.add_argument(
         "--html-path",
         help="Reserved: HTML renderer path component",
+        default=None
+    )
+    parser.add_argument(
+        "--render-font-family",
+        help="HTML render font-family override (e.g. \"'Courier New', Courier, monospace\")",
+        default=None
+    )
+    parser.add_argument(
+        "--render-font-size-pt",
+        type=int,
+        help="HTML render font size in points (default: 10)",
         default=None
     )
     parser.add_argument(

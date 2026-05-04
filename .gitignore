@@ -22,6 +22,12 @@ __pycache__/
 test_*.zip
 test_*.tar
 
+# Notes backups
+notes_backup_*.zip
+
+# Temporary working directory
+tmp/
+
 # Configuration overrides (keep templates)
 # .gdata_server_local.yaml
 

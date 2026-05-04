@@ -1,5 +1,6 @@
 #!/usr/bin/python
 import copy
+import functools
 import os
 import random
 import string
@@ -63,6 +64,366 @@ def _get_or_create_sidecar(db, key: str, content: list) -> dict:
         sidecar['block_ids'] = [_new_block_id() for _ in content]
         _save_sidecar(db, key, sidecar)
     return sidecar
+
+
+# ---------------------------------------------------------------------------
+# Table-op helpers
+# ---------------------------------------------------------------------------
+
+def _resolve_table_block(op_body: dict, content: list, block_ids: list):
+    """Return (content_index, table_dict) for the 'block' field. Raises on error."""
+    block_ref = op_body.get('block')
+    if block_ref is None:
+        raise fastapi.HTTPException(status_code=400, detail="'block' is required for table ops")
+    if isinstance(block_ref, str):
+        try:
+            idx = block_ids.index(block_ref)
+        except ValueError:
+            raise fastapi.HTTPException(status_code=404, detail=f"block_id not found: {block_ref!r}")
+    elif isinstance(block_ref, int):
+        if block_ref < 0 or block_ref >= len(content):
+            raise fastapi.HTTPException(status_code=400, detail=f"block index out of range: {block_ref}")
+        idx = block_ref
+    else:
+        raise fastapi.HTTPException(status_code=400, detail="'block' must be a block ID string or integer index")
+    blk = content[idx]
+    if not isinstance(blk, dict) or 'table' not in blk:
+        raise fastapi.HTTPException(status_code=400, detail=f"block at index {idx} is not a table block")
+    return idx, blk['table']
+
+
+def _resolve_column(columns: list, column_ref, required: bool = True):
+    """Return column index from a name (str) or index (int). Raises on error."""
+    if column_ref is None:
+        if required:
+            raise fastapi.HTTPException(status_code=400, detail="'column' is required")
+        return None
+    if isinstance(column_ref, int):
+        if column_ref < 0 or column_ref >= len(columns):
+            raise fastapi.HTTPException(status_code=400, detail=f"column index out of range: {column_ref}")
+        return column_ref
+    try:
+        return columns.index(column_ref)
+    except ValueError:
+        raise fastapi.HTTPException(status_code=400, detail=f"column not found: {column_ref!r}")
+
+
+def _build_row(values, columns: list, default=None) -> list:
+    """Build a fixed-length row from a list (positional) or dict ({col: val})."""
+    if isinstance(values, dict):
+        return [values.get(col, default) for col in columns]
+    if isinstance(values, list):
+        row = list(values)
+        while len(row) < len(columns):
+            row.append(default)
+        return row[:len(columns)]
+    return [default] * len(columns)
+
+
+def _cell_type_rank(v) -> int:
+    if v is None:
+        return 0
+    if isinstance(v, bool):
+        return 1
+    if isinstance(v, (int, float)):
+        return 2
+    return 3
+
+
+def _apply_table_op(op_body: dict, doc: dict, block_ids: list) -> dict:
+    """Handle table.* ops. Mutates doc in-place. Returns result dict."""
+    op = op_body.get('op')
+    table_op = op[6:]  # strip 'table.'
+
+    content = doc.get('content')
+    if not isinstance(content, list):
+        raise fastapi.HTTPException(status_code=400, detail="document content is not a list")
+
+    _idx, table = _resolve_table_block(op_body, content, block_ids)
+    columns = table.setdefault('columns', [])
+    rows = table.setdefault('rows', [])
+
+    # ---- Column operations ----
+
+    if table_op == 'rename_column':
+        col_i = _resolve_column(columns, op_body.get('column'))
+        new_name = op_body.get('new_name')
+        if not isinstance(new_name, str):
+            raise fastapi.HTTPException(status_code=400, detail="'new_name' must be a string")
+        columns[col_i] = new_name
+        return {'status': 'ok'}
+
+    if table_op == 'insert_column':
+        name = op_body.get('name', '')
+        default = op_body.get('default', None)
+        values = op_body.get('values')
+        after = op_body.get('after')
+        position = op_body.get('position')
+        if after is not None:
+            pos = _resolve_column(columns, after) + 1
+        elif position is not None:
+            if not isinstance(position, int) or position < 0 or position > len(columns):
+                raise fastapi.HTTPException(status_code=400, detail=f"'position' must be in 0–{len(columns)}")
+            pos = position
+        else:
+            pos = len(columns)
+        columns.insert(pos, name)
+        if values is not None:
+            if not isinstance(values, list):
+                raise fastapi.HTTPException(status_code=400, detail="'values' must be a list")
+            for r_i, row in enumerate(rows):
+                cell = values[r_i] if r_i < len(values) else default
+                while len(row) < pos:
+                    row.append(None)
+                row.insert(pos, cell)
+        else:
+            for row in rows:
+                while len(row) < pos:
+                    row.append(None)
+                row.insert(pos, default)
+        return {'status': 'ok'}
+
+    if table_op == 'delete_column':
+        col_i = _resolve_column(columns, op_body.get('column'))
+        columns.pop(col_i)
+        for row in rows:
+            if col_i < len(row):
+                row.pop(col_i)
+        return {'status': 'ok'}
+
+    if table_op == 'move_column':
+        from_i = _resolve_column(columns, op_body.get('column'))
+        to = op_body.get('to')
+        after = op_body.get('after')
+        if to is not None:
+            if not isinstance(to, int) or to < 0 or to >= len(columns):
+                raise fastapi.HTTPException(status_code=400, detail=f"'to' must be in 0–{len(columns) - 1}")
+            dest = to
+        elif after is not None:
+            after_i = _resolve_column(columns, after)
+            dest = after_i + 1
+            if from_i < after_i:
+                dest -= 1
+        else:
+            raise fastapi.HTTPException(status_code=400, detail="'to' or 'after' required for move_column")
+        col_val = columns.pop(from_i)
+        columns.insert(dest, col_val)
+        for row in rows:
+            if from_i < len(row):
+                cell = row.pop(from_i)
+                while len(row) < dest:
+                    row.append(None)
+                row.insert(dest, cell)
+        return {'status': 'ok'}
+
+    if table_op == 'reorder_columns':
+        order = op_body.get('order')
+        if not isinstance(order, list) or len(order) != len(columns):
+            raise fastapi.HTTPException(status_code=400, detail=f"'order' must be a list of {len(columns)} column names")
+        if sorted(str(c) for c in order) != sorted(str(c) for c in columns):
+            raise fastapi.HTTPException(status_code=400, detail="'order' must contain the same column names as the existing columns")
+        new_indices = [columns.index(c) for c in order]
+        columns[:] = order
+        for row in rows:
+            old = list(row)
+            row[:] = [old[i] if i < len(old) else None for i in new_indices]
+        return {'status': 'ok'}
+
+    if table_op == 'fill_column':
+        col_i = _resolve_column(columns, op_body.get('column'))
+        if 'value' not in op_body:
+            raise fastapi.HTTPException(status_code=400, detail="'value' is required for fill_column")
+        value = op_body['value']
+        for row in rows:
+            while len(row) <= col_i:
+                row.append(None)
+            row[col_i] = value
+        return {'status': 'ok'}
+
+    if table_op == 'set_columns':
+        new_cols = op_body.get('columns')
+        if not isinstance(new_cols, list) or len(new_cols) != len(columns):
+            raise fastapi.HTTPException(status_code=400, detail=f"'columns' must be a list of {len(columns)} names")
+        columns[:] = new_cols
+        return {'status': 'ok'}
+
+    # ---- Row operations ----
+
+    if table_op == 'insert_row':
+        position = op_body.get('position')
+        if not isinstance(position, int) or position < 0 or position > len(rows):
+            raise fastapi.HTTPException(status_code=400, detail=f"'position' must be an integer in 0–{len(rows)}")
+        row = _build_row(op_body.get('values'), columns, op_body.get('default'))
+        rows.insert(position, row)
+        return {'status': 'ok'}
+
+    if table_op == 'append_row':
+        row = _build_row(op_body.get('values'), columns, op_body.get('default'))
+        rows.append(row)
+        return {'status': 'ok'}
+
+    if table_op == 'delete_row':
+        row_ref = op_body.get('row')
+        if row_ref is None:
+            index_val = op_body.get('index')
+            if index_val is None:
+                raise fastapi.HTTPException(status_code=400, detail="'row' is required for delete_row")
+            index_col = table.get('index_col')
+            if index_col is None:
+                raise fastapi.HTTPException(status_code=400, detail="'index' addressing requires set_index to have been called first")
+            col_i = _resolve_column(columns, index_col)
+            row_ref = next(
+                (i for i, r in enumerate(rows) if (r[col_i] if col_i < len(r) else None) == index_val),
+                None
+            )
+            if row_ref is None:
+                raise fastapi.HTTPException(status_code=404, detail=f"no row with index value {index_val!r}")
+        if not isinstance(row_ref, int) or row_ref < 0 or row_ref >= len(rows):
+            raise fastapi.HTTPException(status_code=400, detail=f"'row' must be in 0–{len(rows) - 1}")
+        rows.pop(row_ref)
+        return {'status': 'ok'}
+
+    if table_op == 'move_row':
+        row_ref = op_body.get('row')
+        to = op_body.get('to')
+        if not isinstance(row_ref, int) or row_ref < 0 or row_ref >= len(rows):
+            raise fastapi.HTTPException(status_code=400, detail=f"'row' must be in 0–{len(rows) - 1}")
+        if not isinstance(to, int) or to < 0 or to >= len(rows):
+            raise fastapi.HTTPException(status_code=400, detail=f"'to' must be in 0–{len(rows) - 1}")
+        row = rows.pop(row_ref)
+        rows.insert(to, row)
+        return {'status': 'ok'}
+
+    if table_op == 'sort':
+        by = op_body.get('by')
+        if by is None:
+            raise fastapi.HTTPException(status_code=400, detail="'by' is required for sort")
+        ascending = op_body.get('ascending', True)
+        by_list = [by] if isinstance(by, str) else by
+        if not isinstance(by_list, list):
+            raise fastapi.HTTPException(status_code=400, detail="'by' must be a column name or list of names")
+        if isinstance(ascending, bool):
+            asc_list = [ascending] * len(by_list)
+        elif isinstance(ascending, list):
+            if len(ascending) != len(by_list):
+                raise fastapi.HTTPException(status_code=400, detail="'ascending' list must match length of 'by' list")
+            asc_list = ascending
+        else:
+            raise fastapi.HTTPException(status_code=400, detail="'ascending' must be a bool or list of bool")
+        resolved_cols = [_resolve_column(columns, c) for c in by_list]
+
+        def _cell_cmp(a, b):
+            ra, rb = _cell_type_rank(a), _cell_type_rank(b)
+            if ra != rb:
+                return (ra > rb) - (ra < rb)
+            if a is None:
+                return 0
+            if isinstance(a, bool):
+                return (int(a) > int(b)) - (int(a) < int(b))
+            if isinstance(a, (int, float)):
+                return (a > b) - (a < b)
+            return (str(a) > str(b)) - (str(a) < str(b))
+
+        def _row_cmp(row_a, row_b):
+            for col_i, asc in zip(resolved_cols, asc_list):
+                ca = row_a[col_i] if col_i < len(row_a) else None
+                cb = row_b[col_i] if col_i < len(row_b) else None
+                c = _cell_cmp(ca, cb)
+                if not asc:
+                    c = -c
+                if c != 0:
+                    return c
+            return 0
+
+        rows.sort(key=functools.cmp_to_key(_row_cmp))
+        return {'status': 'ok'}
+
+    if table_op == 'fill_row':
+        row_ref = op_body.get('row')
+        if not isinstance(row_ref, int) or row_ref < 0 or row_ref >= len(rows):
+            raise fastapi.HTTPException(status_code=400, detail=f"'row' must be in 0–{len(rows) - 1}")
+        if 'value' not in op_body:
+            raise fastapi.HTTPException(status_code=400, detail="'value' is required for fill_row")
+        rows[row_ref] = [op_body['value']] * len(columns)
+        return {'status': 'ok'}
+
+    # ---- Cell operations ----
+
+    if table_op == 'set_cell':
+        row_ref = op_body.get('row')
+        if not isinstance(row_ref, int) or row_ref < 0 or row_ref >= len(rows):
+            raise fastapi.HTTPException(status_code=400, detail=f"'row' must be in 0–{len(rows) - 1}")
+        col_i = _resolve_column(columns, op_body.get('column'))
+        if 'value' not in op_body:
+            raise fastapi.HTTPException(status_code=400, detail="'value' is required for set_cell")
+        row = rows[row_ref]
+        while len(row) <= col_i:
+            row.append(None)
+        row[col_i] = op_body['value']
+        return {'status': 'ok'}
+
+    # ---- Whole-table operations ----
+
+    if table_op == 'set_caption':
+        caption = op_body.get('caption')
+        if caption is None:
+            table.pop('caption', None)
+        else:
+            if not isinstance(caption, str):
+                raise fastapi.HTTPException(status_code=400, detail="'caption' must be a string or null")
+            table['caption'] = caption
+        return {'status': 'ok'}
+
+    if table_op == 'transpose':
+        if not columns:
+            return {'status': 'ok'}
+        n_rows = len(rows)
+        first_col_vals = [row[0] if len(row) > 0 else None for row in rows]
+        new_columns = [str(columns[0])] + [str(v) if v is not None else '' for v in first_col_vals]
+        new_rows = [
+            [str(columns[ci])] + [rows[ri][ci] if ci < len(rows[ri]) else None for ri in range(n_rows)]
+            for ci in range(1, len(columns))
+        ]
+        table['columns'] = new_columns
+        table['rows'] = new_rows
+        return {'status': 'ok'}
+
+    if table_op == 'set_index':
+        col_i = _resolve_column(columns, op_body.get('column'))
+        table['index_col'] = columns[col_i]
+        return {'status': 'ok'}
+
+    if table_op == 'clear_index':
+        table.pop('index_col', None)
+        return {'status': 'ok'}
+
+    if table_op == 'replace':
+        col_ref = op_body.get('column', None)
+        if 'old_value' not in op_body:
+            raise fastapi.HTTPException(status_code=400, detail="'old_value' is required for replace")
+        if 'new_value' not in op_body:
+            raise fastapi.HTTPException(status_code=400, detail="'new_value' is required for replace")
+        old_value = op_body['old_value']
+        new_value = op_body['new_value']
+        col_indices = ([_resolve_column(columns, col_ref)] if col_ref is not None
+                       else list(range(len(columns))))
+        count = 0
+        for row in rows:
+            for ci in col_indices:
+                if ci < len(row) and row[ci] == old_value:
+                    row[ci] = new_value
+                    count += 1
+        return {'status': 'ok', 'replaced': count}
+
+    _SUPPORTED_TABLE_OPS = (
+        'rename_column, insert_column, delete_column, move_column, reorder_columns, fill_column, set_columns, '
+        'insert_row, append_row, delete_row, move_row, sort, fill_row, '
+        'set_cell, set_caption, transpose, set_index, clear_index, replace'
+    )
+    raise fastapi.HTTPException(
+        status_code=400,
+        detail=f"unknown table op: {table_op!r}. Supported: {_SUPPORTED_TABLE_OPS}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -206,12 +567,15 @@ def _apply_op(op_body: dict, doc: dict, block_ids: list) -> dict:
             content[index] = block
             return {'status': 'ok'}
 
+    if isinstance(op, str) and op.startswith('table.'):
+        return _apply_table_op(op_body, doc, block_ids)
+
     raise fastapi.HTTPException(
         status_code=400,
         detail=(
             f"unknown op: {op!r}. Supported: append_block, insert_block, replace_block, "
             "delete_block, delete_blocks, patch_meta, insert_before, insert_after, "
-            "batch, get_with_block_ids"
+            "batch, get_with_block_ids, table.*"
         )
     )
 
