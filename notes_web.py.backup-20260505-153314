@@ -1,21 +1,18 @@
 """
-notes_web.py — JSONHTL notes renderer with writable_note support
+notes_web.py — read-only JSONHTL notes renderer for www.critchley.biz/notes/
 
-Routes added to the REST app:
+Routes added to the REST app before the catch-all:
   GET /notes/            → redirect to /notes/README
   GET /notes/{key:path}  → render note as HTML
-  POST /writeback/       → handle writable_note form submissions
 """
 
 import html as _html
 import json
-import os
 import re
-from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi import APIRouter
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 _CSS = """\
 * { box-sizing: border-box; }
@@ -65,38 +62,6 @@ th { background: #eee; font-family: sans-serif; }
     padding-top: 0.6em;
 }
 .meta-key { font-weight: 600; color: #666; }
-.writable-note {
-    margin: 1.5em 0;
-    padding: 1em;
-    background: #f9f9f9;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-}
-.writable-note textarea {
-    display: block;
-    width: 100%;
-    font-family: 'Courier New', monospace;
-    font-size: 0.9em;
-    padding: 0.7em;
-    border: 1px solid #bbb;
-    border-radius: 2px;
-    min-height: 200px;
-    resize: vertical;
-}
-.writable-note button {
-    padding: 0.5em 1.2em;
-    font-size: 0.95em;
-    background: #0066cc;
-    color: white;
-    border: none;
-    border-radius: 2px;
-    cursor: pointer;
-    font-family: sans-serif;
-    margin-top: 0.8em;
-}
-.writable-note button:hover {
-    background: #0052a3;
-}
 """
 
 
@@ -191,82 +156,7 @@ def _render_block(block) -> str:
         items_html = ''.join(_render_list_item(i) for i in lst.get('items', []))
         return f'{label_html}<{tag}>{items_html}</{tag}>'
 
-    if 'bullet_list' in block:
-        # bullet_list format: [[item1_content], [item2_content]]
-        # Each item can contain text strings and/or link dicts
-        items_html = ''.join(_render_list_item(i) for i in block.get('bullet_list', []))
-        return f'<ul>{items_html}</ul>'
-
-    if 'writable_note' in block:
-        return _render_writable_note(block['writable_note'])
-
     return ''
-
-
-def _render_writable_note(wn: dict) -> str:
-    """Render a writable_note element as textarea + submit button."""
-    if not isinstance(wn, dict):
-        return ''
-    
-    notename = _html.escape(wn.get('notename', ''))
-    placeholder = _html.escape(wn.get('placeholder', 'Enter text here...'))
-    
-    # Generate a unique form ID based on notename
-    form_id = re.sub(r'[^a-z0-9_-]', '_', wn.get('notename', 'form').lower())
-    
-    html = f'''<div class="writable-note" id="wn-{form_id}">
-<form onsubmit="submitWritableNote(event, '{notename}')">
-    <textarea 
-        name="text" 
-        placeholder="{placeholder}"
-        style="width: 100%; font-family: 'Courier New', monospace; font-size: 0.9em; padding: 0.7em; border: 1px solid #bbb; border-radius: 2px; min-height: 200px;"
-    ></textarea>
-    <div style="margin-top: 0.8em;">
-        <button type="submit" style="padding: 0.5em 1.2em; font-size: 0.95em; background: #0066cc; color: white; border: none; border-radius: 2px; cursor: pointer;">Save</button>
-        <span id="wn-status-{form_id}" style="margin-left: 1em; font-size: 0.9em; color: #666;"></span>
-    </div>
-</form>
-</div>
-
-<script>
-function submitWritableNote(event, notename) {{
-    event.preventDefault();
-    const form = event.target;
-    const textarea = form.querySelector('textarea');
-    const text = textarea.value;
-    const formId = notename.replace(/[^a-z0-9_-]/gi, '_').toLowerCase();
-    const statusSpan = document.getElementById('wn-status-' + formId);
-    
-    statusSpan.textContent = 'Saving...';
-    statusSpan.style.color = '#666';
-    
-    fetch('/writeback/' + encodeURIComponent(notename), {{
-        method: 'POST',
-        headers: {{'Content-Type': 'application/json'}},
-        body: JSON.stringify({{text: text}})
-    }})
-    .then(r => r.json())
-    .then(data => {{
-        if (data.status === 'ok') {{
-            statusSpan.textContent = 'Saved ✓';
-            statusSpan.style.color = '#080';
-            textarea.value = '';
-            setTimeout(() => {{
-                statusSpan.textContent = '';
-            }}, 3000);
-        }} else {{
-            statusSpan.textContent = 'Error: ' + (data.message || 'unknown error');
-            statusSpan.style.color = '#c00';
-        }}
-    }})
-    .catch(err => {{
-        statusSpan.textContent = 'Error: ' + err.message;
-        statusSpan.style.color = '#c00';
-    }});
-}}
-</script>
-'''
-    return html
 
 
 def _render_content(content, skip_h1: bool = False) -> str:
@@ -367,67 +257,5 @@ def make_router(api_base: str) -> APIRouter:
         if doc is None:
             return HTMLResponse(_not_found_page(key), status_code=404)
         return HTMLResponse(_render_page(key, doc))
-
-    @router.post('/writeback/{notename}')
-    async def writeback_post(notename: str, request: Request):
-        """Handle POST /writeback/<notename> for writable_note submissions."""
-        
-        # Validate notename: regex ^[a-zA-Z0-9_-]+$
-        if not re.match(r'^[a-zA-Z0-9_\-]+$', notename):
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "status": "error",
-                    "message": "notename contains invalid characters (allowed: a-z A-Z 0-9 _ -)"
-                }
-            )
-        
-        # Parse request body
-        try:
-            body = await request.json()
-            text = body.get('text', '')
-        except Exception:
-            return JSONResponse(
-                status_code=400,
-                content={"status": "error", "message": "invalid request body"}
-            )
-        
-        # Generate timestamp and safe filename
-        timestamp = datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
-        safe_name = notename.replace('/', '__')
-        filename = f"{safe_name}_{timestamp}.txt"
-        
-        # Ensure writeback directory exists
-        writeback_dir = '/var/www/webdav/writeback'
-        try:
-            os.makedirs(writeback_dir, exist_ok=True)
-        except OSError as e:
-            return JSONResponse(
-                status_code=500,
-                content={"status": "error", "message": f"cannot create directory: {e}"}
-            )
-        
-        # Write file
-        filepath = os.path.join(writeback_dir, filename)
-        try:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(text)
-        except OSError as e:
-            return JSONResponse(
-                status_code=500,
-                content={"status": "error", "message": f"cannot write file: {e}"}
-            )
-        
-        # Return success
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "ok",
-                "saved": True,
-                "notename": notename,
-                "timestamp": timestamp,
-                "path": f"writeback/{filename}"
-            }
-        )
 
     return router

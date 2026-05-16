@@ -3,6 +3,7 @@ import builtins
 import code
 import contextlib
 import io
+import math
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -89,6 +90,212 @@ def patched_input(func):
         builtins.input = old_input
 
 
+_BUILTIN_MISSING = object()
+
+
+@contextlib.contextmanager
+def patched_builtin(name, func):
+    """Temporarily set builtins.<name> = func; restore (or delete) on exit."""
+    old = getattr(builtins, name, _BUILTIN_MISSING)
+    setattr(builtins, name, func)
+    try:
+        yield
+    finally:
+        if old is _BUILTIN_MISSING:
+            try:
+                delattr(builtins, name)
+            except AttributeError:
+                pass
+        else:
+            setattr(builtins, name, old)
+
+
+# ---------------------------------------------------------------------------
+# show() support
+# ---------------------------------------------------------------------------
+
+class _ShowCollector:
+    """Accumulates items produced by show() calls during cell execution."""
+    def __init__(self):
+        self.items: List[Any] = []
+
+    def append(self, item: Any) -> None:
+        self.items.append(item)
+
+
+def _coerce_numeric_sequence(values: Any, label: str) -> List[float]:
+    """Convert values into a flat numeric list suitable for plotting."""
+    if isinstance(values, (str, bytes, dict)):
+        raise TypeError(f"plot({label}) expects a numeric sequence, got {type(values).__name__}")
+    if isinstance(values, (int, float)):
+        values = [values]
+    else:
+        try:
+            values = list(values)
+        except TypeError as exc:
+            raise TypeError(
+                f"plot({label}) expects an iterable numeric sequence"
+            ) from exc
+
+    out: List[float] = []
+    for i, v in enumerate(values):
+        try:
+            fv = float(v)
+        except Exception as exc:
+            raise TypeError(
+                f"plot({label}) value at index {i} is not numeric: {v!r}"
+            ) from exc
+        if not math.isfinite(fv):
+            raise ValueError(f"plot({label}) value at index {i} is not finite: {v!r}")
+        out.append(fv)
+    return out
+
+
+def _make_plot_func(collector: "_ShowCollector"):
+    """Build plot() builtin that records numeric series data for UI rendering.
+
+    Signatures:
+        plot(y)               – single series, x = 0,1,2,...
+        plot(x, y)            – single series
+        plot(x, y1, y2, ...)  – multiple series, shared x
+        plot(y1, y2, ...)     – multiple series, x = 0,1,2,... (all y must be same length)
+    """
+    def _is_sequence(v: Any) -> bool:
+        return not isinstance(v, (str, bytes, dict)) and hasattr(v, '__iter__')
+
+    def plot(*args: Any, title: str = "", x_label: str = "x", y_label: str = "y") -> Dict[str, Any]:
+        if len(args) == 0:
+            raise TypeError("plot() requires at least one argument")
+
+        # Determine whether first arg is x or y by checking if second arg is also a sequence
+        series_list = []
+        if len(args) == 1:
+            y_vals = _coerce_numeric_sequence(args[0], "y")
+            x_vals = [float(i) for i in range(len(y_vals))]
+            series_list = [{"name": "series0", "x": x_vals, "y": y_vals}]
+        elif len(args) == 2:
+            x_vals = _coerce_numeric_sequence(args[0], "x")
+            y_vals = _coerce_numeric_sequence(args[1], "y")
+            if len(x_vals) != len(y_vals):
+                raise ValueError(
+                    f"plot(x, y) requires equal lengths, got {len(x_vals)} and {len(y_vals)}"
+                )
+            series_list = [{"name": "series0", "x": x_vals, "y": y_vals}]
+        else:
+            # 3+ args: either plot(x, y1, y2, ...) or plot(y1, y2, y3, ...)
+            # Heuristic: if first arg length equals second arg length, treat as plot(x, y1, y2, ...)
+            first = _coerce_numeric_sequence(args[0], "arg0")
+            second = _coerce_numeric_sequence(args[1], "arg1")
+            if len(first) == len(second):
+                # treat first as x, rest as y-series
+                x_vals = first
+                y_arrays = [second] + [_coerce_numeric_sequence(a, f"y{i+1}") for i, a in enumerate(args[2:])]
+            else:
+                # treat all as y-series, auto-generate x
+                y_arrays = [first, second] + [_coerce_numeric_sequence(a, f"y{i+2}") for i, a in enumerate(args[2:])]
+                n = max(len(y) for y in y_arrays)
+                x_vals = [float(i) for i in range(n)]
+            for idx, y_vals in enumerate(y_arrays):
+                if len(y_vals) != len(x_vals):
+                    raise ValueError(
+                        f"plot series {idx} length {len(y_vals)} != x length {len(x_vals)}"
+                    )
+                series_list.append({"name": f"series{idx}", "x": x_vals, "y": y_vals})
+
+        spec = {
+            "kind": "plot",
+            "title": str(title or "Plot"),
+            "x_label": str(x_label),
+            "y_label": str(y_label),
+            "series": series_list,
+        }
+        collector.append(spec)
+        return spec
+
+    return plot
+
+
+def _make_jsonml_for_ndarray(arr: Any) -> Any:
+    """Convert a numpy ndarray to a JSONML table."""
+    dtype = str(arr.dtype)
+    shape = arr.shape
+    ndim = arr.ndim
+    if ndim == 1:
+        dims = f"({shape[0]},)"
+        caption = f"{dtype} {dims}"
+        row = ["tr", {}] + [["td", {}, str(v)] for v in arr]
+        return ["table", {}, ["caption", {}, caption], row]
+    elif ndim == 2:
+        dims = f"({shape[0]}×{shape[1]})"
+        caption = f"{dtype} {dims}"
+        rows = []
+        for r in arr:
+            rows.append(["tr", {}] + [["td", {}, str(v)] for v in r])
+        return ["table", {}, ["caption", {}, caption]] + rows
+    else:
+        # 3D+: caption + first 2D slice
+        dims = "×".join(str(s) for s in shape)
+        caption = f"{dtype} ({dims}) — first slice:"
+        leading = (0,) * (ndim - 2)
+        sub = arr[leading]
+        tbl = _make_jsonml_for_ndarray(sub)
+        return ["div", {}, ["div", {}, caption], tbl]
+
+
+def _make_jsonml_for_dataframe(obj: Any) -> Any:
+    """Convert a pandas DataFrame or Series to a JSONML table."""
+    cls = type(obj).__name__
+    if cls == "DataFrame":
+        cols = list(obj.columns)
+        head = ["tr", {}] + [["th", {}, "index"]] + [["th", {}, str(c)] for c in cols]
+        rows = [head]
+        for idx, row in obj.iterrows():
+            rows.append(["tr", {}] + [["td", {}, str(idx)]] + [["td", {}, str(row[c])] for c in cols])
+        return ["table", {}] + rows
+    else:  # Series
+        head = ["tr", {}, ["th", {}, "index"], ["th", {}, "value"]]
+        rows = [head]
+        for idx, val in obj.items():
+            rows.append(["tr", {}, ["td", {}, str(idx)], ["td", {}, str(val)]])
+        return ["table", {}] + rows
+
+
+def _make_show_func(collector: "_ShowCollector"):
+    """Build the show() callable injected into cell execution."""
+    def show(obj: Any) -> None:
+        # 1. __show__ protocol
+        if hasattr(obj, "__show__") and callable(obj.__show__):
+            try:
+                result = obj.__show__()
+            except Exception as exc:
+                collector.append(f"[show: __show__() raised {exc!r}]")
+                return
+            collector.append(result)
+            return
+        # 2. numpy ndarray
+        try:
+            import numpy as _np
+            if isinstance(obj, _np.ndarray):
+                collector.append(_make_jsonml_for_ndarray(obj))
+                return
+        except ImportError:
+            pass
+        # 3. pandas DataFrame / Series
+        try:
+            import pandas as _pd
+            if isinstance(obj, (_pd.DataFrame, _pd.Series)):
+                collector.append(_make_jsonml_for_dataframe(obj))
+                return
+        except ImportError:
+            pass
+        # 4. fallback: str()
+        try:
+            collector.append(str(obj))
+        except Exception as exc:
+            collector.append(f"[show: str() raised {exc!r}]")
+    return show
+
+
 def format_syntax_error(exc: SyntaxError) -> str:
     return "".join(traceback.format_exception_only(type(exc), exc))
 
@@ -141,12 +348,13 @@ class SheetKernel:
             for record in self._cells.values()
         ]
 
-    def get_output(self, name: str) -> Tuple[str, str, bool]:
+    def get_output(self, name: str) -> Tuple[str, str, bool, list]:
         record = self._cells[name]
         return (
             record.last_output,
             record.last_error,
             record.status is CellStatus.OK,
+            [],
         )
 
     def run_cell(
@@ -154,7 +362,7 @@ class SheetKernel:
         name: str,
         source: str,
         inputs: Sequence[str] = (),
-    ) -> Tuple[str, str, bool]:
+    ) -> Tuple[str, str, bool, list]:
         if self._running:
             raise RuntimeError("SheetKernel is already running")
         record = self._cells.get(name)
@@ -180,6 +388,7 @@ class SheetKernel:
         ok = False
         start = time.perf_counter()
         self._running = True
+        show_collector = _ShowCollector()
         try:
             try:
                 code_obj = compile(source, filename, "exec")
@@ -200,9 +409,13 @@ class SheetKernel:
                     except StopIteration:
                         raise EOFError("SheetKernel input exhausted")
 
+                show_func = _make_show_func(show_collector)
+                plot_func = _make_plot_func(show_collector)
                 with contextlib.redirect_stdout(stdout_buf), \
                      contextlib.redirect_stderr(stderr_buf), \
-                     patched_input(input_shim):
+                     patched_input(input_shim), \
+                     patched_builtin("show", show_func), \
+                     patched_builtin("plot", plot_func):
                     try:
                         exec(code_obj, self.namespace, self.namespace)
                     except BaseException as exc:
@@ -217,7 +430,7 @@ class SheetKernel:
             record.run_time_ms = elapsed * 1000.0
             record.status = CellStatus.OK if ok else CellStatus.ERROR
             self._running = False
-        return record.last_output, record.last_error, ok
+        return record.last_output, record.last_error, ok, list(show_collector.items)
 
 
 def detect_inputs(source: str) -> List[str]:

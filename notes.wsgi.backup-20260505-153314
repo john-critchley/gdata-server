@@ -15,8 +15,6 @@ import urllib.error
 import urllib.parse
 from html import escape
 from urllib.parse import quote, unquote
-import sys
-import importlib
 
 # The gdata notes server (must be running)
 GDATA_URL = 'http://127.0.0.1:8021'
@@ -158,72 +156,6 @@ def _render_table(tbl):
     return '\n'.join(rows)
 
 
-def _render_writable_note(wn):
-    """Render a writable_note element as textarea + submit button."""
-    if not isinstance(wn, dict):
-        return ''
-    
-    notename = escape(wn.get('notename', ''))
-    placeholder = escape(wn.get('placeholder', 'Enter text here...'))
-    
-    # Generate a unique form ID based on notename
-    form_id = escape(re.sub(r'[^a-z0-9_-]', '_', wn.get('notename', 'form').lower()))
-    
-    html = f'''<div class="writable-note" id="wn-{form_id}">
-<form onsubmit="submitWritableNote(event, '{notename}')">
-    <textarea 
-        name="text" 
-        placeholder="{placeholder}"
-        style="width: 100%; font-family: 'Courier New', monospace; font-size: 0.9em; padding: 0.7em; border: 1px solid #bbb; border-radius: 2px; min-height: 200px;"
-    ></textarea>
-    <div style="margin-top: 0.8em;">
-        <button type="submit" style="padding: 0.5em 1.2em; font-size: 0.95em; background: #0066cc; color: white; border: none; border-radius: 2px; cursor: pointer;">Save</button>
-        <span id="wn-status-{form_id}" style="margin-left: 1em; font-size: 0.9em; color: #666;"></span>
-    </div>
-</form>
-</div>
-
-<script>
-function submitWritableNote(event, notename) {{
-    event.preventDefault();
-    const form = event.target;
-    const textarea = form.querySelector('textarea');
-    const text = textarea.value;
-    const formId = notename.replace(/[^a-z0-9_-]/gi, '_').toLowerCase();
-    const statusSpan = document.getElementById('wn-status-' + formId);
-    
-    statusSpan.textContent = 'Saving...';
-    statusSpan.style.color = '#666';
-    
-    fetch('/writeback/' + encodeURIComponent(notename), {{
-        method: 'POST',
-        headers: {{'Content-Type': 'application/json'}},
-        body: JSON.stringify({{text: text}})
-    }})
-    .then(r => r.json())
-    .then(data => {{
-        if (data.status === 'ok') {{
-            statusSpan.textContent = 'Saved ✓';
-            statusSpan.style.color = '#080';
-            textarea.value = '';
-            setTimeout(() => {{
-                statusSpan.textContent = '';
-            }}, 3000);
-        }} else {{
-            statusSpan.textContent = 'Error: ' + (data.message || 'unknown error');
-            statusSpan.style.color = '#c00';
-        }}
-    }})
-    .catch(err => {{
-        statusSpan.textContent = 'Error: ' + err.message;
-        statusSpan.style.color = '#c00';
-    }});
-}}
-</script>
-'''
-    return html
-
-
 def _render_blocks(blocks, script_name):
     html = []
     for block in blocks:
@@ -240,8 +172,6 @@ def _render_blocks(blocks, script_name):
                 html.append(_render_list(block['list'], script_name))
             elif 'table' in block:
                 html.append(_render_table(block['table']))
-            elif 'writable_note' in block:
-                html.append(_render_writable_note(block['writable_note']))
             # unknown block types silently ignored per spec
     return '\n'.join(html)
 
@@ -295,37 +225,6 @@ th { background: #eee; font-family: sans-serif; }
 }
 .meta table { font-size: 1em; }
 .meta th { font-weight: normal; color: #777; }
-.writable-note {
-    margin: 1.5em 0;
-    padding: 1em;
-    background: #f9f9f9;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-}
-.writable-note textarea {
-    display: block;
-    width: 100%;
-    font-family: 'Courier New', monospace;
-    font-size: 0.9em;
-    padding: 0.7em;
-    border: 1px solid #bbb;
-    border-radius: 2px;
-    min-height: 200px;
-    resize: vertical;
-}
-.writable-note button {
-    padding: 0.5em 1.2em;
-    font-size: 0.95em;
-    background: #0066cc;
-    color: white;
-    border: none;
-    border-radius: 2px;
-    cursor: pointer;
-    font-family: sans-serif;
-}
-.writable-note button:hover {
-    background: #0052a3;
-}
 """
 
 
@@ -417,44 +316,7 @@ def _not_found(key, script_name):
 def application(environ, start_response):
     path_info = environ.get('PATH_INFO', '')
     script_name = environ.get('SCRIPT_NAME', '/notes')
-    method = environ.get('REQUEST_METHOD', 'GET')
-    
-    # Handle POST /writeback/<notename>
-    if method == 'POST' and path_info.startswith('/writeback/'):
-        # Reload notes_writeback module on each request (auto-pick up changes)
-        if 'notes_writeback' in sys.modules:
-            importlib.reload(sys.modules['notes_writeback'])
-        else:
-            import notes_writeback
-        
-        # Read request body
-        try:
-            content_length = int(environ.get('CONTENT_LENGTH', 0))
-            body_bytes = environ['wsgi.input'].read(content_length)
-        except (ValueError, KeyError):
-            body_bytes = b''
-        
-        # Delegate to writeback handler
-        status_code, response_dict = sys.modules['notes_writeback'].handle_post(environ, body_bytes)
-        
-        # Return JSON response
-        response_json = json.dumps(response_dict).encode('utf-8')
-        start_response(f'{status_code} {"OK" if status_code == 200 else "Error"}', [
-            ('Content-Type', 'application/json; charset=utf-8'),
-            ('Content-Length', str(len(response_json))),
-            ('Access-Control-Allow-Origin', '*'),
-        ])
-        return [response_json]
-    
-    # Handle GET /notes/...
-    if method != 'GET':
-        body = b'Method not allowed'
-        start_response('405 Method Not Allowed', [
-            ('Content-Type', 'text/plain'),
-            ('Content-Length', str(len(body))),
-        ])
-        return [body]
-    
+
     # Decode the note key from the URL path
     key = unquote(path_info.lstrip('/'))
 

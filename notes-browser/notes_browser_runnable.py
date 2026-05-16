@@ -148,6 +148,8 @@ def load_browser_config(args):
         cfg['control_udp_enabled'] = bool(args.control_udp_enabled)
     if args.control_unix_enabled is not None:
         cfg['control_unix_enabled'] = bool(args.control_unix_enabled)
+    if hasattr(args, 'page') and args.page is not None:
+        cfg['start_page'] = args.page
 
     # Coerce types.
     cfg['control_tcp_enabled'] = _to_bool(cfg['control_tcp_enabled'])
@@ -622,7 +624,8 @@ class NotesBrowser(wx.Frame):
         
         self._create_ui()
         self.Bind(wx.EVT_CLOSE, self._on_close)
-        self._navigate_to("")  # Start at root
+        start_page = config.get('start_page', '')
+        self._navigate_to(start_page)  # Start at root (or configured page)
         self._update_base_url_status()
         self._start_control_server()
     
@@ -1667,7 +1670,14 @@ class NotesBrowser(wx.Frame):
                     'sheet.inputs.set',
                     'sheet.inputs.set_many',
                     'sheet.cell.run',
+                    'sheet.cell.scroll_into_view',
                     'sheet.run_all',
+                    'sheet.save_page',
+                    'sheet.save_data',
+                    'sheet.load_data',
+                    'sheet.clear_outputs',
+                    'sheet.export_state',
+                    'sheet.import_state',
                     'sheet.cell.get_output',
                     'sheet.get_state',
                     'sheet.restart',
@@ -1988,6 +1998,22 @@ class NotesBrowser(wx.Frame):
                 updated.append({'id': fid, 'value': val})
             return {'updated': updated, 'count': len(updated)}
 
+        if method == 'sheet.cell.scroll_into_view':
+            sp = _require_sheet()
+            cell_ref = params.get('cell')
+            if cell_ref is None:
+                raise ValueError("'cell' is required")
+            if isinstance(cell_ref, int):
+                if cell_ref < 0 or cell_ref >= len(sp.exec_cell_order):
+                    raise KeyError(f'Cell index out of range: {cell_ref}')
+                cell_id = sp.exec_cell_order[cell_ref]
+            else:
+                cell_id = str(cell_ref)
+                if cell_id not in sp.cells:
+                    raise KeyError(f'Cell not found: {cell_id!r}')
+            wx.CallAfter(sp.scroll_cell_into_view, cell_id)
+            return {'cell': cell_id}
+
         if method == 'sheet.cell.run':
             sp = _require_sheet()
             if sp.is_running:
@@ -2006,7 +2032,7 @@ class NotesBrowser(wx.Frame):
             sp.run_cell(cell_id)
             panel = sp.cell_panels[cell_id]
             return {'cell': cell_id, 'status': panel.status_label.GetLabel(),
-                    'output': panel.output_ctrl.GetValue() if panel.output_ctrl.IsShown() else ''}
+                    'output': panel.get_stdout_text()}
 
         if method == 'sheet.run_all':
             sp = _require_sheet()
@@ -2017,8 +2043,57 @@ class NotesBrowser(wx.Frame):
             for cell_id in sp.exec_cell_order:
                 panel = sp.cell_panels[cell_id]
                 results.append({'cell': cell_id, 'status': panel.status_label.GetLabel(),
-                                'output': panel.output_ctrl.GetValue() if panel.output_ctrl.IsShown() else ''})
+                                'output': panel.get_stdout_text()})
             return {'cells': results}
+
+        if method == 'sheet.clear_outputs':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            sp._on_clear_outputs()
+            return {'cleared': True}
+
+        if method == 'sheet.save_page':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            return sp.save_page()
+
+        if method == 'sheet.save_data':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            path = params.get('path')
+            if not isinstance(path, str) or not path.strip():
+                raise ValueError("'path' must be a non-empty string")
+            return sp.export_data(path)
+
+        if method == 'sheet.load_data':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            path = params.get('path')
+            if not isinstance(path, str) or not path.strip():
+                raise ValueError("'path' must be a non-empty string")
+            return sp.import_data(path)
+
+        if method == 'sheet.export_state':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            path = params.get('path')
+            if not isinstance(path, str) or not path.strip():
+                raise ValueError("'path' must be a non-empty string")
+            return sp.export_data(path)
+
+        if method == 'sheet.import_state':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            path = params.get('path')
+            if not isinstance(path, str) or not path.strip():
+                raise ValueError("'path' must be a non-empty string")
+            return sp.import_data(path)
 
         if method == 'sheet.cell.get_output':
             sp = _require_sheet()
@@ -2035,7 +2110,7 @@ class NotesBrowser(wx.Frame):
                     raise KeyError(f'Cell not found: {cell_id!r}')
             panel = sp.cell_panels[cell_id]
             return {'cell': cell_id, 'status': panel.status_label.GetLabel(),
-                    'output': panel.output_ctrl.GetValue() if panel.output_ctrl.IsShown() else ''}
+                    'output': panel.get_stdout_text()}
 
         if method == 'sheet.get_state':
             sp = _require_sheet()
@@ -2053,7 +2128,7 @@ class NotesBrowser(wx.Frame):
                     'status': panel.status_label.GetLabel(),
                 }
                 if include_outputs:
-                    entry['output'] = panel.output_ctrl.GetValue() if panel.output_ctrl.IsShown() else ''
+                    entry['output'] = panel.get_stdout_text()
                 cells_out.append(entry)
             return {'doc_key': self.current_page, 'is_running': sp.is_running,
                     'cells': cells_out}
@@ -2420,7 +2495,12 @@ def main():
         help="Optional shared token for JSON-RPC control requests",
         default=None
     )
-    
+    parser.add_argument(
+        "--page",
+        help="Initial page key to navigate to on startup",
+        default=None
+    )
+
     args = parser.parse_args()
     
     cfg = load_browser_config(args)

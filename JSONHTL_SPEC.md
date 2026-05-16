@@ -85,6 +85,78 @@ Each item may be:
 
 `label`, if present, is rendered as a visible heading or prefix immediately before the list. `ordered` selects `<ol>` (true) or `<ul>` (false).
 
+#### writable_note
+
+A writable text input area for loading and persisting external data. Begins blank and accepts text input via GUI, API, or programmatic writes. Contains `notename` (string) and optionally `placeholder` (string).
+
+```json
+{"writable_note": {"notename": "user_input", "placeholder": "Enter your notes here..."}}
+```
+
+**Behaviour:**
+
+- **Display:** Text area with a "Save" button below it.
+- **Edit:** User/API/MCP can write text into the area.
+- **Save:** On button click or API invocation, text is POSTed to `/writeback/<safe_notename>`.
+- **Post-save:** Text area is cleared to placeholder state. User sees success/error response.
+- **Timestamp:** Server appends ISO 8601 timestamp to saved file. If two saves occur within the same second, the second overwrites the first (humans cannot paste multiple documents and POST that rapidly).
+
+**Notename validation:**
+
+A valid `notename` matches the regex: `^[a-zA-Z0-9_-]+$` (alphanumeric, underscore, hyphen). Slashes in document keys (e.g., `serscr/roundtrip-test`) are replaced with `__` in filenames by the renderer (`serscr__roundtrip-test`).
+
+**Keys:**
+
+| Key | Type | Description |
+|---|---|---|
+| `notename` | string | Identifier for this writable area. Must match `[a-zA-Z0-9_-]+`. Used to construct POST endpoint and filename. |
+| `placeholder` | string | Optional. Text displayed in textarea when empty. |
+
+**POST request format:**
+
+Renderer POSTs to `/writeback/<safe_notename>` with text content:
+
+```
+POST /writeback/user_input
+
+Content-Type: application/json
+{"text": "content here"}
+```
+
+**File storage (server-side):**
+
+- **Browser context:** Saves to `writeback/<safe_notename>_<timestamp>.txt` relative to the browser location.
+- **Web server context:** Saves to `<WEBDAV_ROOT>/writeback/<safe_notename>_<timestamp>.txt`.
+
+Where `<timestamp>` is ISO 8601 format (e.g., `2026-05-05T15:30:42Z`). Same-second overwrites are intentional. WebDAV integration allows external tools to access saved files.
+
+**Server response (success):**
+
+```json
+{
+  "status": "ok",
+  "saved": true,
+  "notename": "user_input",
+  "timestamp": "2026-05-05T15:30:42Z",
+  "path": "writeback/user_input_2026-05-05T15:30:42Z.txt"
+}
+```
+
+**Server response (error):**
+
+```json
+{
+  "status": "error",
+  "message": "Invalid notename: contains forbidden characters"
+}
+```
+
+**Security:**
+
+- Notename must match regex; no path traversal possible.
+- `/` replaced with `__`; directory traversal prevented.
+- Timestamp prevents rapid re-posts from creating multiple files.
+- Server validates notename before write.
 
 ## Inline Elements
 
@@ -142,6 +214,64 @@ When JSONHTL documents are stored in a key-value system, the root node (typicall
 - Link to convention documents that define any extended keys, metadata schemas, or organisational structures used in this particular system.
 
 An LLM or tool encountering the system for the first time reads the root node, follows only the links it needs, and stops. This keeps context window usage minimal.
+
+
+## Runnable Documents
+
+A JSONHTL document can be marked as **runnable** by setting `"runnable": true` at the top level. A runnable document contains one or more executable code cells alongside ordinary prose content.
+
+```json
+{
+  "title": "My Sheet",
+  "runnable": true,
+  "content": [...]
+}
+```
+
+Renderers that support runnable documents (such as the notes-browser) display these in a notebook-style view with per-cell Run buttons, shared execution state, and captured output areas. Renderers that do not support runnable documents may ignore the `runnable` flag and display the document as plain prose.
+
+### Executable codeblocks
+
+Within a runnable document, a `codeblock` is made executable by adding `"exec": true`. Only executable codeblocks are run; non-executable codeblocks are displayed as read-only reference code.
+
+```json
+{"codeblock": {"lang": "python", "exec": true, "name": "setup", "body": "value = 42"}}
+```
+
+Additional keys used in executable codeblocks:
+
+| Key | Type | Description |
+|---|---|---|
+| `exec` | boolean | `true` marks this codeblock as executable |
+| `name` | string | Stable identifier for the cell. Used as the cell key in RPC calls and state tracking. Must be unique within the document. If absent or duplicated, the cell's position index is used instead. |
+| `lang` | string | Language tag. Currently only `python`, `py`, or empty string are executed. |
+| `body` | string | Source code to run. |
+
+### Cell identity and input detection
+
+When the browser loads a runnable document, it scans each executable cell for `input()` calls using AST analysis. Any detected calls generate corresponding input fields in the UI and in the control socket API. Input values are ordered by occurrence within the cell; cell N's first `input()` is field `name/0`, the second is `name/1`, and so on.
+
+### Execution model
+
+All cells share a single Python namespace for the lifetime of the sheet session. Variables defined in one cell are visible to later cells. Execution order within a run-all sequence follows document order. Restarting the kernel clears the shared namespace; clearing outputs does not.
+
+### Example runnable document
+
+```json
+{
+  "title": "Quick Calculation",
+  "runnable": true,
+  "content": [
+    {"heading": {"level": 1, "text": "Quick Calculation"}},
+    {"para": ["Define a base value, then compute results."]},
+    {"codeblock": {"lang": "python", "exec": true, "name": "setup",
+      "body": "value = 42\nprint('value set to', value)"}},
+    {"para": ["Compute a result using the base value."]},
+    {"codeblock": {"lang": "python", "exec": true, "name": "compute",
+      "body": "print('double:', value * 2)"}}
+  ]
+}
+```
 
 
 ## Example Document
