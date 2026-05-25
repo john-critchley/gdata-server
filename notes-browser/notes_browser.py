@@ -575,6 +575,99 @@ class NotesHtmlWindow(wx.html.HtmlWindow):
             self.browser._navigate_to(url)
 
 
+class ControlSettingsDialog(wx.Dialog):
+    """Dialog for configuring the control listening interface."""
+
+    def __init__(self, parent, config):
+        super().__init__(parent, title="Control Interface Settings",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self._build(config)
+        self.Fit()
+        self.CenterOnParent()
+
+    def _section_box(self, outer, label):
+        box = wx.StaticBox(outer, label=label)
+        sizer = wx.StaticBoxSizer(box, wx.VERTICAL)
+        grid = wx.FlexGridSizer(cols=2, vgap=4, hgap=8)
+        grid.AddGrowableCol(1)
+        return sizer, grid
+
+    def _build(self, cfg):
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        # --- TCP section ---
+        tcp_sizer, tcp_grid = self._section_box(self, "TCP")
+        self._tcp_enabled = wx.CheckBox(self, label="Enabled")
+        self._tcp_enabled.SetValue(bool(cfg.get('control_tcp_enabled', False)))
+        tcp_sizer.Add(self._tcp_enabled, 0, wx.ALL, 4)
+
+        tcp_grid.Add(wx.StaticText(self, label="Host:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._tcp_host = wx.TextCtrl(self, value=str(cfg.get('control_host', '127.0.0.1')))
+        tcp_grid.Add(self._tcp_host, 1, wx.EXPAND)
+
+        tcp_grid.Add(wx.StaticText(self, label="Port:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._tcp_port = wx.SpinCtrl(self, min=1, max=65535,
+                                     value=str(cfg.get('control_tcp_port', 8711)))
+        tcp_grid.Add(self._tcp_port, 1, wx.EXPAND)
+        tcp_sizer.Add(tcp_grid, 0, wx.EXPAND | wx.ALL, 4)
+        outer.Add(tcp_sizer, 0, wx.EXPAND | wx.ALL, 8)
+
+        # --- UDP section ---
+        udp_sizer, udp_grid = self._section_box(self, "UDP")
+        self._udp_enabled = wx.CheckBox(self, label="Enabled")
+        self._udp_enabled.SetValue(bool(cfg.get('control_udp_enabled', False)))
+        udp_sizer.Add(self._udp_enabled, 0, wx.ALL, 4)
+
+        udp_grid.Add(wx.StaticText(self, label="Host:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._udp_host = wx.TextCtrl(self, value=str(cfg.get('control_host', '127.0.0.1')))
+        udp_grid.Add(self._udp_host, 1, wx.EXPAND)
+
+        udp_grid.Add(wx.StaticText(self, label="Port:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._udp_port = wx.SpinCtrl(self, min=1, max=65535,
+                                     value=str(cfg.get('control_udp_port', 8711)))
+        udp_grid.Add(self._udp_port, 1, wx.EXPAND)
+        udp_sizer.Add(udp_grid, 0, wx.EXPAND | wx.ALL, 4)
+        outer.Add(udp_sizer, 0, wx.EXPAND | wx.ALL, 8)
+
+        # --- Unix socket section ---
+        unix_sizer, unix_grid = self._section_box(self, "Unix Socket")
+        self._unix_enabled = wx.CheckBox(self, label="Enabled")
+        self._unix_enabled.SetValue(bool(cfg.get('control_unix_enabled', False)))
+        unix_sizer.Add(self._unix_enabled, 0, wx.ALL, 4)
+
+        unix_grid.Add(wx.StaticText(self, label="Socket path:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._unix_socket = wx.TextCtrl(self, value=str(cfg.get('control_unix_socket', '')))
+        unix_grid.Add(self._unix_socket, 1, wx.EXPAND)
+        unix_sizer.Add(unix_grid, 0, wx.EXPAND | wx.ALL, 4)
+        outer.Add(unix_sizer, 0, wx.EXPAND | wx.ALL, 8)
+
+        # --- Shared token ---
+        token_sizer, token_grid = self._section_box(self, "Authentication")
+        token_grid.Add(wx.StaticText(self, label="Token:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._token = wx.TextCtrl(self, value=str(cfg.get('control_token', '')))
+        token_grid.Add(self._token, 1, wx.EXPAND)
+        token_sizer.Add(token_grid, 0, wx.EXPAND | wx.ALL, 4)
+        outer.Add(token_sizer, 0, wx.EXPAND | wx.ALL, 8)
+
+        # --- Buttons ---
+        btn_sizer = self.CreateButtonSizer(wx.OK | wx.CANCEL)
+        outer.Add(btn_sizer, 0, wx.EXPAND | wx.ALL, 8)
+
+        self.SetSizer(outer)
+
+    def get_values(self):
+        return {
+            'control_tcp_enabled': self._tcp_enabled.GetValue(),
+            'control_udp_enabled': self._udp_enabled.GetValue(),
+            'control_unix_enabled': self._unix_enabled.GetValue(),
+            'control_host': self._tcp_host.GetValue().strip() or '127.0.0.1',
+            'control_tcp_port': self._tcp_port.GetValue(),
+            'control_udp_port': self._udp_port.GetValue(),
+            'control_unix_socket': self._unix_socket.GetValue().strip(),
+            'control_token': self._token.GetValue(),
+        }
+
+
 class NotesBrowser(wx.Frame):
     """Main browser window."""
 
@@ -585,6 +678,7 @@ class NotesBrowser(wx.Frame):
     ID_ZOOM_IN = wx.NewIdRef()
     ID_ZOOM_OUT = wx.NewIdRef()
     ID_ZOOM_RESET = wx.NewIdRef()
+    ID_PREFERENCES = wx.NewIdRef()
 
     BASE_HTML_FONT = 10
 
@@ -656,9 +750,14 @@ class NotesBrowser(wx.Frame):
         zoom_out_item = view_menu.Append(self.ID_ZOOM_OUT, "Zoom &Out\tCtrl+-", "Decrease content size")
         zoom_reset_item = view_menu.Append(self.ID_ZOOM_RESET, "Zoom &Reset\tCtrl+0", "Reset content size")
         menubar.Append(view_menu, "&View")
-        
+
+        # Settings menu
+        settings_menu = wx.Menu()
+        prefs_item = settings_menu.Append(self.ID_PREFERENCES, "&Control Interface…", "Configure control listening interface")
+        menubar.Append(settings_menu, "&Settings")
+
         self.SetMenuBar(menubar)
-        
+
         # Bind menu events
         self.Bind(wx.EVT_MENU, self._on_open, open_item)
         self.Bind(wx.EVT_MENU, self._on_exit, exit_item)
@@ -673,6 +772,7 @@ class NotesBrowser(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_zoom_in, zoom_in_item)
         self.Bind(wx.EVT_MENU, self._on_zoom_out, zoom_out_item)
         self.Bind(wx.EVT_MENU, self._on_zoom_reset, zoom_reset_item)
+        self.Bind(wx.EVT_MENU, self._on_control_settings, prefs_item)
         
         # Set up accelerator table for keys that don't work well as menu shortcuts
         accel_entries = [
@@ -1161,6 +1261,17 @@ class NotesBrowser(wx.Frame):
         except Exception as e:
             self.control_server = None
             self._set_status(f"Control start failed: {e}")
+
+    def _on_control_settings(self, _event):
+        dlg = ControlSettingsDialog(self, self.config)
+        if dlg.ShowModal() == wx.ID_OK:
+            updates = dlg.get_values()
+            self.config.update(updates)
+            if self.control_server:
+                self.control_server.stop()
+                self.control_server = None
+            self._start_control_server()
+        dlg.Destroy()
 
     def _update_base_url_status(self):
         base = str(self.config.get('html_base_url', '')).rstrip('/')
