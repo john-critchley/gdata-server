@@ -106,7 +106,10 @@ class _TokenStore:
         try:
             self._data = json.loads(self._path.read_text())
         except (FileNotFoundError, json.JSONDecodeError):
-            self._data = {"codes": {}, "tokens": {}}
+            self._data = {"codes": {}, "tokens": {}, "clients": {}}
+        self._data.setdefault("codes", {})
+        self._data.setdefault("tokens", {})
+        self._data.setdefault("clients", {})
 
     def _save(self):
         tmp = self._path.with_suffix(".tmp")
@@ -141,6 +144,17 @@ class _TokenStore:
         self._clean()
         self._data["tokens"][token] = {"exp": time.time() + TOKEN_TTL}
         self._save()
+
+    def save_client(self, client_id: str, client_secret: str, auth_method: str):
+        self._data.setdefault("clients", {})[client_id] = {
+            "client_secret": client_secret,
+            "token_endpoint_auth_method": auth_method,
+            "issued_at": int(time.time()),
+        }
+        self._save()
+
+    def get_client(self, client_id: str) -> Optional[dict]:
+        return self._data.get("clients", {}).get(client_id)
 
     def is_valid(self, token: str) -> bool:
         entry = self._data.get("tokens", {}).get(token)
@@ -184,11 +198,15 @@ class BearerMiddleware:
                 await self.app(scope, receive, send)
                 return
             # Reject with 401
+            resource_metadata = (
+                f'Bearer realm="gdata", '
+                f'resource_metadata="{ISSUER}/.well-known/oauth-protected-resource/mcp"'
+            ).encode()
             await send({
                 "type": "http.response.start",
                 "status": 401,
                 "headers": [
-                    [b"www-authenticate", b'Bearer realm="gdata"'],
+                    [b"www-authenticate", resource_metadata],
                     [b"content-type", b"text/plain"],
                 ],
             })
@@ -270,8 +288,54 @@ async def oauth_metadata():
         "response_types_supported":              ["code"],
         "grant_types_supported":                 ["authorization_code"],
         "code_challenge_methods_supported":      ["S256"],
-        "token_endpoint_auth_methods_supported": ["client_secret_post"],
+        "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
+        "registration_endpoint":                 f"{ISSUER}/oauth/register",
     }
+
+
+def _client_known(client_id: str) -> bool:
+    return client_id == CLIENT_ID or _get_store().get_client(client_id) is not None
+
+
+def _client_auth_ok(client_id: str, client_secret: Optional[str]) -> bool:
+    if client_id == CLIENT_ID:
+        return hmac.compare_digest(client_secret or "", CLIENT_SECRET)
+    client = _get_store().get_client(client_id)
+    if not client:
+        return False
+    method = client.get("token_endpoint_auth_method", "client_secret_post")
+    if method == "none":
+        return True
+    return hmac.compare_digest(client_secret or "", client.get("client_secret", ""))
+
+
+@router.post("/oauth/register")
+async def register_client(request: Request):
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+    redirect_uris = body.get("redirect_uris") or []
+    if not isinstance(redirect_uris, list) or not all(isinstance(uri, str) for uri in redirect_uris):
+        raise HTTPException(400, "redirect_uris must be a list of strings")
+    auth_method = body.get("token_endpoint_auth_method", "client_secret_post")
+    if auth_method not in ("client_secret_post", "none"):
+        auth_method = "client_secret_post"
+    client_id = "codex-" + secrets.token_urlsafe(18)
+    client_secret = "" if auth_method == "none" else secrets.token_urlsafe(32)
+    _get_store().save_client(client_id, client_secret, auth_method)
+    response = {
+        "client_id": client_id,
+        "client_id_issued_at": int(time.time()),
+        "redirect_uris": redirect_uris,
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": auth_method,
+    }
+    if client_secret:
+        response["client_secret"] = client_secret
+        response["client_secret_expires_at"] = 0
+    return response
 
 
 @router.get("/oauth/authorize", response_class=HTMLResponse)
@@ -283,7 +347,7 @@ async def authorize_get(
     code_challenge: str = "",
     code_challenge_method: str = "S256",
 ):
-    if client_id != CLIENT_ID:
+    if not _client_known(client_id):
         raise HTTPException(400, "unknown client_id")
     if code_challenge_method != "S256":
         raise HTTPException(400, "only S256 code_challenge_method supported")
@@ -300,7 +364,7 @@ async def authorize_post(
     code_challenge_method: str = Form("S256"),
     password:              str = Form(...),
 ):
-    if client_id != CLIENT_ID:
+    if not _client_known(client_id):
         raise HTTPException(400, "unknown client_id")
     if not _check_password(password):
         return HTMLResponse(
@@ -330,8 +394,7 @@ async def token_endpoint(
 ):
     if grant_type != "authorization_code":
         raise HTTPException(400, "unsupported_grant_type")
-    if (client_id != CLIENT_ID
-            or not hmac.compare_digest(client_secret or "", CLIENT_SECRET)):
+    if not _client_auth_ok(client_id or "", client_secret):
         raise HTTPException(401, "invalid_client")
     entry = _get_store().consume_code(code or "")
     if not entry:
