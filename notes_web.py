@@ -110,6 +110,7 @@ def _md_inline(text: str) -> str:
     text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
     text = re.sub(r'`(.+?)`', r'<code>\1</code>', text)
     text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
+    text = text.replace('\n', '<br>')
     return text
 
 
@@ -145,6 +146,10 @@ def _render_list_item(item) -> str:
     if isinstance(item, list):
         return f'<li>{_render_inlines(item)}</li>'
     if isinstance(item, dict):
+        if 'para' in item:
+            return f'<li>{_render_inlines(item["para"])}</li>'
+        if any(k in item for k in ('link', 'code', 'bold', 'href')):
+            return f'<li>{_render_inline(item)}</li>'
         pairs = ' '.join(
             f'<strong>{_html.escape(str(k))}:</strong> {_html.escape(str(v))}'
             for k, v in item.items()
@@ -297,7 +302,7 @@ def _nav_html(key: str) -> str:
 
 
 def _meta_html(doc: dict) -> str:
-    skip = {'title', 'content'}
+    skip = {'title', 'content', 'runnable'}
     rows = [(k, v) for k, v in doc.items() if k not in skip]
     if not rows:
         return ''

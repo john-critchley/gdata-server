@@ -297,7 +297,7 @@ class NotesHTMLRenderer:
             elif 'content' in data and isinstance(data['content'], str):
                 html.append(f'<p>{self._escape(data["content"])}</p>')
 
-            meta_pairs = [(k, v) for k, v in data.items() if k not in ('title', 'content')]
+            meta_pairs = [(k, v) for k, v in data.items() if k not in ('title', 'content', 'runnable')]
             if meta_pairs:
                 parts = ' &nbsp;·&nbsp; '.join(
                     f'<b>{self._escape(str(k))}</b> {self._escape(str(v))}'
@@ -369,6 +369,8 @@ class NotesHTMLRenderer:
                     result.append(self._render_link(item['link']))
                 elif 'code' in item:
                     result.append(f'<code>{self._escape(item["code"])}</code>')
+                elif 'bold' in item:
+                    result.append(f'<b>{self._escape(item["bold"])}</b>')
                 elif 'href' in item:
                     # Direct link object
                     result.append(self._render_link(item))
@@ -469,16 +471,25 @@ class NotesHTMLRenderer:
             elif isinstance(item, list):
                 rows.append(f'<li>{self._render_inline_list(item)}</li>')
             elif isinstance(item, dict):
-                pairs = ', '.join(
-                    f'<b>{self._escape(str(k))}:</b> {self._escape(str(v))}'
-                    for k, v in item.items()
-                )
-                rows.append(f'<li>{pairs}</li>')
+                if 'para' in item:
+                    para = item['para']
+                    if isinstance(para, list):
+                        rows.append(f'<li>{self._render_inline_list(para)}</li>')
+                    else:
+                        rows.append(f'<li>{self._render_markup_text(str(para))}</li>')
+                elif any(k in item for k in ('link', 'code', 'bold', 'href')):
+                    rows.append(f'<li>{self._render_inline_list([item])}</li>')
+                else:
+                    pairs = ', '.join(
+                        f'<b>{self._escape(str(k))}:</b> {self._escape(str(v))}'
+                        for k, v in item.items()
+                    )
+                    rows.append(f'<li>{pairs}</li>')
             else:
                 rows.append(f'<li>{self._escape(str(item))}</li>')
         rows.append(f'</{tag}>')
         return '\n'.join(rows)
-    
+
     def _render_table(self, table):
         """Render a JSONHTL table block as an HTML table."""
         if not isinstance(table, dict):
@@ -541,8 +552,9 @@ class NotesHTMLRenderer:
         escaped = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', escaped)
         # *italic* (but not inside an already-matched **)
         escaped = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', escaped)
+        escaped = escaped.replace('\n', '<br>')
         return escaped
-    
+
     def _error_html(self, message):
         """Render an error message."""
         return f'''<html><body style="{self._base_text_style()}">
