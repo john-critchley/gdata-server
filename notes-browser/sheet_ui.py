@@ -283,6 +283,7 @@ class SheetCellPanel(wx.Panel):
         self.run_button = wx.Button(header, label='Run')
         header.SetBackgroundColour(wx.Colour(236, 240, 247))
         self.name_label.SetFont(ui_bold)
+        self.name_label.SetForegroundColour(wx.Colour(30, 40, 70))
         self.lang_label.SetFont(ui)
         self.lang_label.SetForegroundColour(wx.Colour(55, 82, 140))
         self.status_label.SetFont(ui_bold)
@@ -291,6 +292,7 @@ class SheetCellPanel(wx.Panel):
         hs.Add(self.lang_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
         hs.AddStretchSpacer(1)
         hs.Add(self.status_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
+        hs.AddStretchSpacer(1)
         hs.Add(self.run_button, 0, wx.ALL, 4)
         header.SetSizer(hs)
         outer.Add(header, 0, wx.EXPAND)
@@ -352,6 +354,24 @@ class SheetCellPanel(wx.Panel):
             plot_panel = _PlotPanel(self.output_host, item)
             sizer.Add(plot_panel, 0, wx.EXPAND | wx.TOP, 4)
             self.sheet_panel._bind_mousewheel_chain(plot_panel)
+        elif isinstance(item, dict) and item.get('kind') == 'html':
+            htmlwin = wx.html.HtmlWindow(self.output_host, style=wx.BORDER_SIMPLE)
+            htmlwin.SetMinSize((-1, 300))
+            htmlwin.SetPage(item.get('content', ''))
+            sizer.Add(htmlwin, 0, wx.EXPAND | wx.TOP, 4)
+            self.sheet_panel._bind_mousewheel_chain(htmlwin)
+            def _fit_html(hw=htmlwin):
+                ir = hw.GetInternalRepresentation()
+                if ir:
+                    hw.SetMinSize((-1, max(80, ir.GetHeight() + 20)))
+                hw.GetParent().Layout()
+                cell = hw.GetParent().GetParent()
+                if cell:
+                    cell.Layout()
+                    scroller = cell.GetParent()
+                    if scroller and hasattr(scroller, 'FitInside'):
+                        scroller.FitInside()
+            wx.CallAfter(_fit_html)
         elif isinstance(item, list):
             html_str = jsonml_to_html(item)
             htmlwin = wx.html.HtmlWindow(self.output_host, style=wx.BORDER_SIMPLE)
@@ -709,7 +729,7 @@ class RunnableSheetPanel(wx.Panel):
         target_y = max(0, virt_top - 20)
         self.scroller.Scroll(0, target_y // (ppuy or 1))
 
-    def run_cell(self, cell_id):
+    def run_cell(self, cell_id, scroll=True):
         if self.is_running:
             return
         self.is_running = True
@@ -718,6 +738,8 @@ class RunnableSheetPanel(wx.Panel):
         self.browser._set_nav_enabled(False)
         panel = self.cell_panels[cell_id]
         cell = self.cells[cell_id]
+        if scroll:
+            self.scroll_cell_into_view(cell_id)
         panel.set_running(True)
         wx.YieldIfNeeded()
         try:
@@ -731,7 +753,7 @@ class RunnableSheetPanel(wx.Panel):
             self._set_toolbar_enabled(True)
             self.browser._set_nav_enabled(True)
 
-    def _on_run_all(self):
+    def _on_run_all(self, scroll=True):
         if self.is_running:
             return
         self.is_running = True
@@ -744,6 +766,8 @@ class RunnableSheetPanel(wx.Panel):
             for cell_id in self.exec_cell_order:
                 cell = self.cells[cell_id]
                 panel = self.cell_panels[cell_id]
+                if scroll:
+                    self.scroll_cell_into_view(cell_id)
                 panel.set_running(True)
                 panel.set_status('Running…')
                 wx.YieldIfNeeded()

@@ -650,6 +650,9 @@ class NotesBrowser(wx.Frame):
         file_menu = wx.Menu()
         open_item = file_menu.Append(wx.ID_OPEN, "&Open Page\tCtrl+O", "Open any page")
         file_menu.AppendSeparator()
+        self.save_item = file_menu.Append(wx.ID_SAVE, "&Save Sheet\tCtrl+S", "Save current runnable sheet")
+        self.save_item.Enable(False)
+        file_menu.AppendSeparator()
         exit_item = file_menu.Append(wx.ID_EXIT, "E&xit\tCtrl+Q", "Exit application")
         menubar.Append(file_menu, "&File")
 
@@ -681,6 +684,7 @@ class NotesBrowser(wx.Frame):
         
         # Bind menu events
         self.Bind(wx.EVT_MENU, self._on_open, open_item)
+        self.Bind(wx.EVT_MENU, self._on_save, self.save_item)
         self.Bind(wx.EVT_MENU, self._on_exit, exit_item)
         self.Bind(wx.EVT_MENU, self._on_back, back_item)
         self.Bind(wx.EVT_MENU, self._on_forward, forward_item)
@@ -1464,6 +1468,7 @@ class NotesBrowser(wx.Frame):
             self.content_sizer.Detach(self.sheet_panel)
             self.sheet_panel.Destroy()
             self.sheet_panel = None
+            self.save_item.Enable(False)
         if not self.html.IsShown():
             self.html.Show()
             if self.html.GetContainingSizer() is None:
@@ -1482,6 +1487,7 @@ class NotesBrowser(wx.Frame):
         self.content_sizer.Add(self.sheet_panel, 1, wx.EXPAND)
         self.sheet_panel.Show()
         self.content_host.Layout()
+        self.save_item.Enable(True)
 
     def _set_nav_enabled(self, enabled):
         self._nav_locked = not enabled
@@ -1497,6 +1503,11 @@ class NotesBrowser(wx.Frame):
             self._navigate_to(page_key)
         dlg.Destroy()
     
+    def _on_save(self, event):
+        if self.sheet_panel is not None and not self.sheet_panel.is_running:
+            self.sheet_panel.save_page()
+            self._set_status(f"Saved: {self.current_page}")
+
     def _on_exit(self, event):
         """Exit the application."""
         self.Close(True)
@@ -2041,7 +2052,8 @@ class NotesBrowser(wx.Frame):
                 cell_id = str(cell_ref)
                 if cell_id not in sp.cells:
                     raise KeyError(f'Cell not found: {cell_id!r}')
-            sp.run_cell(cell_id)
+            scroll = params.get('scroll', True)
+            sp.run_cell(cell_id, scroll=scroll)
             panel = sp.cell_panels[cell_id]
             return {'cell': cell_id, 'status': panel.status_label.GetLabel(),
                     'output': panel.get_stdout_text()}
@@ -2050,7 +2062,8 @@ class NotesBrowser(wx.Frame):
             sp = _require_sheet()
             if sp.is_running:
                 raise ValueError('Sheet is busy (SHEET_BUSY)')
-            sp._on_run_all()
+            scroll = params.get('scroll', True)
+            sp._on_run_all(scroll=scroll)
             results = []
             for cell_id in sp.exec_cell_order:
                 panel = sp.cell_panels[cell_id]
@@ -2249,7 +2262,7 @@ class RemoteControlServer:
                 done.set()
 
         wx.CallAfter(_run)
-        if not done.wait(timeout=10):
+        if not done.wait(timeout=600):
             raise TimeoutError('UI thread timeout')
         if 'error' in holder:
             raise holder['error']

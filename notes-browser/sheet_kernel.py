@@ -3,7 +3,11 @@ import builtins
 import code
 import contextlib
 import io
+import json
 import math
+import queue as _queue_mod
+import sys
+import threading
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -113,6 +117,21 @@ def patched_builtin(name, func):
 # ---------------------------------------------------------------------------
 # show() support
 # ---------------------------------------------------------------------------
+
+class HtmlOutput:
+    """Wrap an HTML string for display in a cell output panel.
+
+    Usage in a cell::
+
+        show(HtmlOutput('<b>hello</b>'))
+        show(HtmlOutput(html_heatmap(data, ...)))
+    """
+    def __init__(self, html: str):
+        self._html = html
+
+    def __show__(self):
+        return {'kind': 'html', 'content': self._html}
+
 
 class _ShowCollector:
     """Accumulates items produced by show() calls during cell execution."""
@@ -415,7 +434,8 @@ class SheetKernel:
                      contextlib.redirect_stderr(stderr_buf), \
                      patched_input(input_shim), \
                      patched_builtin("show", show_func), \
-                     patched_builtin("plot", plot_func):
+                     patched_builtin("plot", plot_func), \
+                     patched_builtin("HtmlOutput", HtmlOutput):
                     try:
                         exec(code_obj, self.namespace, self.namespace)
                     except BaseException as exc:

@@ -273,7 +273,7 @@ def _render_form(client_id, redirect_uri, state,
 @router.get("/.well-known/oauth-protected-resource/{path:path}")
 async def protected_resource_metadata(path: str = ""):
     return {
-        "resource":              f"{ISSUER}/mcp",
+        "resource":              f"{ISSUER}/mcp/",
         "authorization_servers": [ISSUER],
     }
 
@@ -294,15 +294,20 @@ async def oauth_metadata():
 
 
 def _client_known(client_id: str) -> bool:
-    return client_id == CLIENT_ID or _get_store().get_client(client_id) is not None
+    # Accept: hardcoded CLIENT_ID, registered clients, or any codex-* (ChatGPT)
+    return (client_id == CLIENT_ID or 
+            _get_store().get_client(client_id) is not None or
+            client_id.startswith("codex-"))
 
 
 def _client_auth_ok(client_id: str, client_secret: Optional[str]) -> bool:
     if client_id == CLIENT_ID:
         return hmac.compare_digest(client_secret or "", CLIENT_SECRET)
+    # For codex-* clients (ChatGPT), check store or allow "none" auth
     client = _get_store().get_client(client_id)
     if not client:
-        return False
+        # If not registered, assume codex-* clients use "none" (no secret required)
+        return client_id.startswith("codex-")
     method = client.get("token_endpoint_auth_method", "client_secret_post")
     if method == "none":
         return True

@@ -49,6 +49,33 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Robust JSON parsing (handles shell-escaped quotes)
+# ---------------------------------------------------------------------------
+
+def _parse_json_robust(text: str):
+    """Parse JSON string robustly, handling common escaping issues.
+    
+    Tries standard JSON parsing first. If that fails due to shell-escaped
+    apostrophes (e.g., \' from shell escaping), tries to unescape them.
+    Apostrophes should never appear escaped in JSON — they're literal chars.
+    """
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        # If error mentions \' invalid escape, try unescaping it
+        if r"\'" in text or "\\\'" in text:
+            try:
+                # Replace shell-escaped apostrophes with literal apostrophes
+                unescaped = text.replace("\\'", "'")
+                return json.loads(unescaped)
+            except json.JSONDecodeError:
+                # Still failed, re-raise original error
+                raise e
+        raise
+
 # ---------------------------------------------------------------------------
 # DB singleton + lock
 # ---------------------------------------------------------------------------
@@ -482,7 +509,7 @@ def _apply_table_op(op_body: dict, doc: dict, block_ids: list) -> dict:
     _SUPPORTED_TABLE_OPS = (
         'rename_column, insert_column, delete_column, move_column, reorder_columns, fill_column, set_columns, '
         'insert_row, append_row, delete_row, move_row, sort, fill_row, deduplicate, '
-        'set_cell, fill_na, set_caption, transpose, set_index, clear_index, replace'
+        'set_cell, set_caption, transpose, set_index, clear_index, replace'
     )
     raise fastapi.HTTPException(
         status_code=400,
@@ -672,6 +699,7 @@ async def db_put(db_path: str, key: str, value_json: str, if_rev: str | None = N
             'block_ids': [_new_block_id() for _ in content],
         }
         _save_sidecar(db, key, new_sidecar)
+        return new_sidecar
 
 
 async def db_delete(db_path: str, key: str) -> bool:
@@ -827,8 +855,12 @@ def make_rest_app(db_path: str, rest_port: int = 8020) -> fastapi.FastAPI:
     async def put_item(path: str, request: fastapi.Request):
         key = _key(path)
         body = (await request.body()).decode('utf-8')
-        await db_put(db_path, key, body)
-        return {'status': 'ok'}
+        sidecar = await db_put(db_path, key, body)
+        return {
+            'status': 'ok',
+            'rev': sidecar['rev'],
+            'block_ids': sidecar['block_ids'],
+        }
 
     @app.delete("/{path:path}")
     async def delete_item(path: str):
@@ -887,6 +919,14 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
+def _mcp_error(detail: str, status_code: int | None = None) -> dict:
+    """Standard error dict for MCP tool responses. Includes docs pointer."""
+    r = {"error": detail, "docs": "README"}
+    if status_code is not None:
+        r["status_code"] = status_code
+    return r
+
+
 def _make_tool_server(db_path: str) -> Server:
     """Create and return a Server instance with all gdata tools registered.
 
@@ -902,17 +942,18 @@ def _make_tool_server(db_path: str) -> Server:
             types.Tool(
                 name="get",
                 description=(
-                    "Get a value by key. Returns the parsed JSON value. "
-                    "Use include_block_ids=True before a batch edit to obtain stable block IDs and the current rev. "
-                    "If unfamiliar with this notes system, call with key='README' first."
+                    "Read a complete document. Call with just the key to get the full JSONHTL document. "
+                    "Examples: get(key='README') to read the README, get(key='notes/example') to read a note. "
+                    "Optional: set include_block_ids=true if you need revision metadata and stable block IDs for batch editing — "
+                    "this returns {document, rev, block_ids} instead of just the document."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "key": {"type": "string"},
+                        "key": {"type": "string", "description": "The key/path of the document to read"},
                         "include_block_ids": {
                             "type": "boolean",
-                            "description": "If true, returns {document, rev, block_ids} instead of the raw document. Use before batch edits.",
+                            "description": "Optional. If true, returns {document, rev, block_ids} for batch editing. Default false returns the document only.",
                         },
                     },
                     "required": ["key"],
@@ -921,8 +962,9 @@ def _make_tool_server(db_path: str) -> Server:
             types.Tool(
                 name="put",
                 description=(
-                    "Store a full document under a key. Regenerates all block IDs. "
-                    "Use patch() or batch() for targeted edits to individual blocks."
+                    "Store a full document under a key. Regenerates all block IDs and returns the new revision and block_ids. "
+                    "Use this before patch() or batch() operations — no need for a follow-up get(include_block_ids=true). "
+                    "Use patch() or batch() for targeted edits to individual blocks without full document replacement."
                 ),
                 inputSchema={
                     "type": "object",
@@ -1038,7 +1080,7 @@ def _make_tool_server(db_path: str) -> Server:
                     "Row by integer index ('row' param). "
                     "Composable inside batch(). "
                     "ops: rename_column, insert_column, delete_column, move_column, reorder_columns, fill_column, set_columns, "
-                    "insert_row, append_row, delete_row, move_row, sort, fill_row, "
+                    "insert_row, append_row, delete_row, move_row, sort, fill_row, deduplicate, "
                     "set_cell, set_caption, transpose, set_index, clear_index, replace."
                 ),
                 inputSchema={
@@ -1081,11 +1123,11 @@ def _make_tool_server(db_path: str) -> Server:
                     try:
                         result = await db_patch(db_path, key, {"op": "get_with_block_ids"})
                     except fastapi.HTTPException as e:
-                        result = {"error": e.detail, "status_code": e.status_code}
+                        result = _mcp_error(e.detail, e.status_code)
                 else:
                     raw, found = await db_get(db_path, key)
                     if not found:
-                        result = {"error": f"key not found: {key}"}
+                        result = _mcp_error(f"key not found: {key}")
                     else:
                         try:
                             result = json.loads(raw)
@@ -1096,19 +1138,23 @@ def _make_tool_server(db_path: str) -> Server:
                 value = arguments["value"]
                 if isinstance(value, str):
                     try:
-                        value = json.loads(value)
+                        value = _parse_json_robust(value)
                     except json.JSONDecodeError:
                         pass
                 if_rev = arguments.get("if_rev") or None
                 try:
-                    await db_put(db_path, key, json.dumps(value), if_rev=if_rev)
-                    result = {"status": "ok"}
+                    sidecar = await db_put(db_path, key, json.dumps(value), if_rev=if_rev)
+                    result = {
+                        "status": "ok",
+                        "rev": sidecar["rev"],
+                        "block_ids": sidecar["block_ids"],
+                    }
                 except fastapi.HTTPException as e:
-                    result = {"error": e.detail, "status_code": e.status_code}
+                    result = _mcp_error(e.detail, e.status_code)
             elif name == "delete":
                 key = arguments["key"]
                 deleted = await db_delete(db_path, key)
-                result = {"status": "deleted"} if deleted else {"error": f"key not found: {key}"}
+                result = {"status": "deleted"} if deleted else _mcp_error(f"key not found: {key}")
             elif name == "keys":
                 result = {"keys": await db_keys(db_path)}
             elif name == "patch":
@@ -1119,22 +1165,22 @@ def _make_tool_server(db_path: str) -> Server:
                 for field in ("block", "fields"):
                     if isinstance(body.get(field), str):
                         try:
-                            body[field] = json.loads(body[field])
+                            body[field] = _parse_json_robust(body[field])
                         except json.JSONDecodeError:
                             pass
                 try:
                     result = await db_patch(db_path, key, body)
                 except fastapi.HTTPException as e:
-                    result = {"error": e.detail, "status_code": e.status_code}
+                    result = _mcp_error(e.detail, e.status_code)
             elif name == "batch":
                 key = arguments["key"]
                 ops = arguments.get("ops", [])
                 if isinstance(ops, str):
                     try:
-                        ops = json.loads(ops)
+                        ops = _parse_json_robust(ops)
                     except json.JSONDecodeError:
                         return [types.TextContent(type="text", text=json.dumps(
-                            {"error": "'ops' could not be parsed as JSON"}))]
+                            _mcp_error("'ops' could not be parsed as JSON")))]
                 if_rev = arguments.get("if_rev") or None
                 body = {"op": "batch", "ops": ops}
                 if if_rev:
@@ -1142,24 +1188,24 @@ def _make_tool_server(db_path: str) -> Server:
                 try:
                     result = await db_patch(db_path, key, body)
                 except fastapi.HTTPException as e:
-                    result = {"error": e.detail, "status_code": e.status_code}
+                    result = _mcp_error(e.detail, e.status_code)
             elif name == "table_op":
                 key = arguments["key"]
                 body = {k: v for k, v in arguments.items() if k != "key"}
                 for field in ("values", "order", "columns", "by"):
                     if isinstance(body.get(field), str):
                         try:
-                            body[field] = json.loads(body[field])
+                            body[field] = _parse_json_robust(body[field])
                         except json.JSONDecodeError:
                             pass
                 try:
                     result = await db_patch(db_path, key, body)
                 except fastapi.HTTPException as e:
-                    result = {"error": e.detail, "status_code": e.status_code}
+                    result = _mcp_error(e.detail, e.status_code)
             else:
-                result = {"error": f"unknown tool: {name}"}
+                result = _mcp_error(f"unknown tool: {name}")
         except Exception as e:
-            result = {"error": str(e)}
+            result = _mcp_error(str(e))
 
         return [types.TextContent(type="text", text=json.dumps(result))]
 
