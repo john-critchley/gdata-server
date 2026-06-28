@@ -117,6 +117,28 @@ def patch_doc(key, op, block=None, index=None, indices=None, fields=None):
         return {'error': str(e)}
 
 
+def reorder_doc(key, order, if_rev=None):
+    """Reorder blocks in a document by providing all block IDs in the desired sequence.
+
+    order: list of block ID strings (every current block ID, exactly once).
+    Returns the server response dict, or a dict with 'error' on failure.
+    """
+    body = {'op': 'reorder', 'order': order}
+    if if_rev is not None:
+        body['if_rev'] = if_rev
+    try:
+        response = requests.post(f"{NOTES_URL}/{key}", json=body)
+        if not response.ok:
+            try:
+                detail = response.json()
+            except Exception:
+                detail = response.text
+            return {'error': detail, 'status_code': response.status_code}
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        return {'error': str(e)}
+
+
 def load_doc(key, filepath, delete_after=False):
     """Load a JSON file into a document.
     
@@ -182,6 +204,11 @@ if __name__ == "__main__":
         print(f"  {prog} patch <key> delete_blocks <index> [<index> ...]")
         print(f"  {prog} patch <key> patch_meta <fields_json>")
         print(f"        Apply a block-level patch to a document.")
+        print()
+        print(f"  {prog} reorder <key> <block_id> [<block_id> ...]")
+        print(f"        Reorder blocks in a document.")
+        print(f"        Pass every current block ID in the desired sequence.")
+        print(f"        Get block IDs first with: notes read <key> | ... (or use include_block_ids=true via API).")
         print()
         print(f"  {prog} read [key]              Read a document (default: root)")
         print(f"  {prog} write <key> <content>   Write content to a document")
@@ -290,6 +317,19 @@ if __name__ == "__main__":
             print(f"Error parsing arguments: {e}", file=sys.stderr)
             sys.exit(1)
         result = patch_doc(key, op, **kwargs)
+        if isinstance(result, dict) and 'error' in result:
+            print(json.dumps(result), file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(result))
+    elif command == "reorder":
+        if len(sys.argv) < 4:
+            prog = os.path.basename(sys.argv[0])
+            print(f"Usage: {prog} reorder <key> <block_id> [<block_id> ...]", file=sys.stderr)
+            print("Pass every current block ID in the desired order.", file=sys.stderr)
+            sys.exit(1)
+        key = sys.argv[2]
+        order = sys.argv[3:]
+        result = reorder_doc(key, order)
         if isinstance(result, dict) and 'error' in result:
             print(json.dumps(result), file=sys.stderr)
             sys.exit(1)

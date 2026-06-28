@@ -646,6 +646,46 @@ def _apply_op(op_body: dict, doc: dict, block_ids: list) -> dict:
             content[index] = block
             return {'status': 'ok'}
 
+    if op == 'reorder':
+        order = op_body.get('order')
+        if not isinstance(order, list):
+            raise fastapi.HTTPException(status_code=400, detail="'order' must be a list of block IDs")
+
+        current_ids = block_ids  # same list, just for clarity
+        seen: set = set()
+        duplicates = []
+        for bid in order:
+            if bid in seen:
+                duplicates.append(bid)
+            seen.add(bid)
+
+        current_set = set(current_ids)
+        unknown = [bid for bid in order if bid not in current_set]
+        missing = [bid for bid in current_ids if bid not in seen]
+
+        errors: dict = {}
+        if duplicates:
+            errors['duplicates'] = duplicates
+        if unknown:
+            errors['unknown'] = unknown
+        if missing:
+            errors['missing'] = missing
+
+        if errors:
+            raise fastapi.HTTPException(
+                status_code=422,
+                detail={
+                    'error': 'reorder validation failed',
+                    **errors,
+                    'hint': 'order must list every current block ID exactly once',
+                }
+            )
+
+        id_to_block = {bid: content[i] for i, bid in enumerate(current_ids)}
+        content[:] = [id_to_block[bid] for bid in order]
+        block_ids[:] = list(order)
+        return {'status': 'ok'}
+
     if isinstance(op, str) and op.startswith('table.'):
         return _apply_table_op(op_body, doc, block_ids)
 
@@ -654,7 +694,7 @@ def _apply_op(op_body: dict, doc: dict, block_ids: list) -> dict:
         detail=(
             f"unknown op: {op!r}. Supported: append_block, insert_block, replace_block, "
             "delete_block, delete_blocks, patch_meta, insert_before, insert_after, "
-            "batch, get_with_block_ids, table.*"
+            "reorder, batch, get_with_block_ids, table.*"
         )
     )
 
@@ -903,6 +943,11 @@ def make_rest_app(db_path: str, rest_port: int = 8020) -> fastapi.FastAPI:
         key = _key(path)
         return await db_patch(db_path, key, body)
 
+    @app.patch("/{path:path}")
+    async def patch_item(path: str, body: dict):
+        key = _key(path)
+        return await db_patch(db_path, key, body)
+
     return app
 
 
@@ -1072,6 +1117,32 @@ def _make_tool_server(db_path: str) -> Server:
                 },
             ),
             types.Tool(
+                name="reorder",
+                description=(
+                    "Reorder blocks in a document by providing the complete list of block IDs in the desired sequence. "
+                    "Workflow: get(key, include_block_ids=True) → permute the block_ids array → reorder(key, order=permuted_ids, if_rev=rev). "
+                    "Validation: order must list every current block ID exactly once — missing, unknown, or duplicate IDs are rejected with details. "
+                    "A stale if_rev causes a 409 (another writer may have inserted/deleted blocks since your get). "
+                    "Only block sequence changes; no content or metadata is modified."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string", "description": "Note key"},
+                        "order": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Complete list of all current block IDs in the desired order. Must include every block exactly once.",
+                        },
+                        "if_rev": {
+                            "type": "string",
+                            "description": "Optimistic concurrency token from get(include_block_ids=True). Strongly recommended — a concurrent insert makes the order list stale and fails with 409.",
+                        },
+                    },
+                    "required": ["key", "order"],
+                },
+            ),
+            types.Tool(
                 name="table_op",
                 description=(
                     "Apply a table editing operation to a table block within a JSONHTL note. "
@@ -1183,6 +1254,23 @@ def _make_tool_server(db_path: str) -> Server:
                             _mcp_error("'ops' could not be parsed as JSON")))]
                 if_rev = arguments.get("if_rev") or None
                 body = {"op": "batch", "ops": ops}
+                if if_rev:
+                    body["if_rev"] = if_rev
+                try:
+                    result = await db_patch(db_path, key, body)
+                except fastapi.HTTPException as e:
+                    result = _mcp_error(e.detail, e.status_code)
+            elif name == "reorder":
+                key = arguments["key"]
+                order = arguments["order"]
+                if isinstance(order, str):
+                    try:
+                        order = _parse_json_robust(order)
+                    except json.JSONDecodeError:
+                        return [types.TextContent(type="text", text=json.dumps(
+                            _mcp_error("'order' could not be parsed as JSON")))]
+                if_rev = arguments.get("if_rev") or None
+                body = {"op": "reorder", "order": order}
                 if if_rev:
                     body["if_rev"] = if_rev
                 try:
