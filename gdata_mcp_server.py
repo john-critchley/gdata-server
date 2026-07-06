@@ -868,14 +868,16 @@ async def db_patch(db_path: str, key: str, body: dict) -> dict:
 _SOURCE_MTIME = os.path.getmtime(__file__)
 
 
-def make_rest_app(db_path: str, rest_port: int = 8020) -> fastapi.FastAPI:
+def make_rest_app(db_path: str, rest_port: int = 8020, store_name: str = "default") -> fastapi.FastAPI:
     app = fastapi.FastAPI(redirect_slashes=False)
     app.include_router(gdata_oauth.router)
-    app.include_router(notes_web.make_router(f"http://127.0.0.1:{rest_port}"))
+    if _env_bool("NOTES_WEB", True):
+        app.include_router(notes_web.make_router(f"http://127.0.0.1:{rest_port}"))
 
     @app.middleware("http")
     async def auto_reload(request: fastapi.Request, call_next):
         response = await call_next(request)
+        response.headers["X-GData-Store"] = store_name
         if os.path.getmtime(__file__) != _SOURCE_MTIME:
             os.execv(sys.executable, [sys.executable] + sys.argv)
         return response
@@ -972,7 +974,7 @@ def _mcp_error(detail: str, status_code: int | None = None) -> dict:
     return r
 
 
-def _make_tool_server(db_path: str) -> Server:
+def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
     """Create and return a Server instance with all gdata tools registered.
 
     Called once per transport so each transport has its own Server instance
@@ -983,7 +985,7 @@ def _make_tool_server(db_path: str) -> Server:
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
-        return [
+        tools = [
             types.Tool(
                 name="get",
                 description=(
@@ -1183,6 +1185,10 @@ def _make_tool_server(db_path: str) -> Server:
                 },
             ),
         ]
+        _prefix = f"[{store_name} store] "
+        for _t in tools:
+            _t.description = _prefix + _t.description
+        return tools
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[types.ContentBlock]:
@@ -1300,7 +1306,7 @@ def _make_tool_server(db_path: str) -> Server:
     return server
 
 
-def make_mcp_app(db_path: str) -> Starlette:
+def make_mcp_app(db_path: str, store_name: str = "default") -> Starlette:
     enable_sse        = _env_bool('MCP_SSE',        True)
     enable_streamable = _env_bool('MCP_STREAMABLE', True)
 
@@ -1310,7 +1316,7 @@ def make_mcp_app(db_path: str) -> Starlette:
     routes = []
 
     if enable_sse:
-        sse_server = _make_tool_server(db_path)
+        sse_server = _make_tool_server(db_path, store_name)
         sse = SseServerTransport("/mcp/messages/")
 
         async def handle_sse(request: Request):
@@ -1328,7 +1334,7 @@ def make_mcp_app(db_path: str) -> Starlette:
         ]
 
     if enable_streamable:
-        streamable_server = _make_tool_server(db_path)
+        streamable_server = _make_tool_server(db_path, store_name)
         session_manager = StreamableHTTPSessionManager(streamable_server, stateless=True)
 
         @contextlib.asynccontextmanager
@@ -1362,17 +1368,18 @@ async def main():
     parser.add_argument("--mcp-port",  type=int, default=int(os.getenv("GDATA_MCP_PORT",    8022)))
     parser.add_argument("--host",      default=os.getenv("GDATA_SERVER_HOST", "127.0.0.1"))
     parser.add_argument("--db",        default=os.getenv("GDBM_PATH", ".gdbm"))
+    parser.add_argument("--name",      default=os.getenv("GDATA_STORE_NAME", "default"))
     args = parser.parse_args()
 
     log_level = os.getenv('LOG_LEVEL', 'info').lower()
 
-    rest_app = make_rest_app(args.db, args.rest_port)
-    mcp_app  = make_mcp_app(args.db)
+    rest_app = make_rest_app(args.db, args.rest_port, args.name)
+    mcp_app  = make_mcp_app(args.db, args.name)
 
     rest_cfg = uvicorn.Config(rest_app, host=args.host, port=args.rest_port, log_level=log_level)
     mcp_cfg  = uvicorn.Config(mcp_app,  host=args.host, port=args.mcp_port,  log_level=log_level)
 
-    logging.info(f"REST on {args.host}:{args.rest_port}  |  MCP on {args.host}:{args.mcp_port}  |  db={args.db}")
+    logging.info(f"REST on {args.host}:{args.rest_port}  |  MCP on {args.host}:{args.mcp_port}  |  db={args.db}  |  name={args.name}")
 
     await asyncio.gather(
         uvicorn.Server(rest_cfg).serve(),
