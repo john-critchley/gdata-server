@@ -35,8 +35,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 CLIENT_ID     = os.environ.get("OAUTH_CLIENT_ID",    "gdata")
 CLIENT_SECRET = os.environ.get("OAUTH_CLIENT_SECRET", "")
-PASSWORD_HASH = os.environ.get("OAUTH_PASSWORD",      "")
+PASSWORD_HASH  = os.environ.get("OAUTH_PASSWORD",  "")
+PASSWORD_HASH2 = os.environ.get("OAUTH_PASSWORD2", "")
 ISSUER        = os.environ.get("OAUTH_ISSUER",        "https://www.critchley.biz")
+_issuer_path  = ISSUER.replace("https://", "").replace("http://", "").split("/", 1)
+_STORE_LABEL  = _issuer_path[1].strip("/") if len(_issuer_path) > 1 and _issuer_path[1].strip("/") else "notes"
 TOKEN_FILE    = os.environ.get("OAUTH_TOKEN_FILE",
                                str(Path.home() / ".oauth_tokens.json"))
 
@@ -66,11 +69,9 @@ def make_password_hash(password: Optional[str] = None) -> str:
     return f"pbkdf2:{salt.hex()}:{h.hex()}"
 
 
-def _check_password(password: str) -> bool:
-    if not PASSWORD_HASH or not password:
-        return False
+def _verify_hash(password: str, stored: str) -> bool:
     try:
-        scheme, salt_hex, stored_hex = PASSWORD_HASH.split(":", 2)
+        scheme, salt_hex, stored_hex = stored.split(":", 2)
     except ValueError:
         return False
     if scheme != "pbkdf2":
@@ -79,6 +80,15 @@ def _check_password(password: str) -> bool:
         "sha256", password.encode(), bytes.fromhex(salt_hex), 260_000
     ).hex()
     return hmac.compare_digest(candidate, stored_hex)
+
+def _check_password(password: str) -> bool:
+    if not password:
+        return False
+    if PASSWORD_HASH and _verify_hash(password, PASSWORD_HASH):
+        return True
+    if PASSWORD_HASH2 and _verify_hash(password, PASSWORD_HASH2):
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -227,16 +237,17 @@ _AUTHORIZE_FORM = """\
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Authorise gdata access</title>
+  <title>Authorise {store_label} access</title>
   <style>
     body {{ font-family: sans-serif; max-width: 360px; margin: 5em auto;
             padding: 1.5em; border: 1px solid #ddd; border-radius: 8px; }}
     h2   {{ margin-top: 0; }}
-    input[type=password] {{
+    input[type=text], input[type=password] {{
       width: 100%; padding: .5em; margin: .4em 0 1em;
       box-sizing: border-box; border: 1px solid #ccc;
       border-radius: 4px; font-size: 1em;
     }}
+    input[type=text][readonly] {{ background: #f5f5f5; color: #666; }}
     button {{
       width: 100%; padding: .7em; background: #0a84ff; color: #fff;
       border: none; border-radius: 4px; cursor: pointer; font-size: 1em;
@@ -245,7 +256,7 @@ _AUTHORIZE_FORM = """\
   </style>
 </head>
 <body>
-  <h2>Authorise gdata access</h2>
+  <h2>Authorise {store_label} access</h2>
   {error}
   <form method="post">
     <input type="hidden" name="client_id"             value="{client_id}">
@@ -253,6 +264,7 @@ _AUTHORIZE_FORM = """\
     <input type="hidden" name="state"                 value="{state}">
     <input type="hidden" name="code_challenge"        value="{code_challenge}">
     <input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
+    <input type="text"     name="username" value="{store_label}" readonly>
     <input type="password" name="password" placeholder="Password" autofocus>
     <button type="submit">Allow access</button>
   </form>
@@ -265,6 +277,7 @@ def _render_form(client_id, redirect_uri, state,
     return _AUTHORIZE_FORM.format(
         client_id=client_id, redirect_uri=redirect_uri, state=state,
         code_challenge=code_challenge, code_challenge_method=code_challenge_method,
+        store_label=_STORE_LABEL,
         error=f'<p class="err">{error}</p>' if error else "",
     )
 
