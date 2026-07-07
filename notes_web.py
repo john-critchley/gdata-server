@@ -301,13 +301,25 @@ def _nav_html(key: str) -> str:
     return '<nav>' + ' › '.join(crumbs) + '</nav>'
 
 
+def _format_meta_value(value) -> str:
+    if isinstance(value, list):
+        return ', '.join(str(item) for item in value)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    if value is None:
+        return ''
+    return str(value)
+
+
 def _meta_html(doc: dict) -> str:
     skip = {'title', 'content', 'runnable'}
     rows = [(k, v) for k, v in doc.items() if k not in skip]
     if not rows:
         return ''
     parts = ' &nbsp;·&nbsp; '.join(
-        f'<span class="meta-key">{_html.escape(str(k))}</span> {_html.escape(str(v))}'
+        f'<span class="meta-key">{_html.escape(str(k))}</span> {_html.escape(_format_meta_value(v))}'
         for k, v in rows
     )
     return f'<div class="meta">{parts}</div>'
