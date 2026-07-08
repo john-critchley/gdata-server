@@ -583,6 +583,21 @@ class TestBatchOp:
         r = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "batch", "ops": []})
         assert r.status_code == 400
 
+    def test_batch_ops_string_with_escaped_apostrophe_is_repaired(self, server_url):
+        """Regression test: a client that (wrongly) escapes apostrophes as \\'
+        when building the 'ops' JSON string must still succeed."""
+        ops = [{"op": "append_block", "block": {"para": ["I'll do this"]}}]
+        ops_json_text = json.dumps(ops).replace("I'll", "I\\'ll")
+        r = requests.post(f"{server_url}/{TEST_KEY}",
+                          json={"op": "batch", "ops": ops_json_text})
+        assert r.status_code == 200, r.text
+        assert doc(server_url)["content"][-1] == {"para": ["I'll do this"]}
+
+    def test_batch_ops_string_genuinely_invalid_json_still_400(self, server_url):
+        r = requests.post(f"{server_url}/{TEST_KEY}",
+                          json={"op": "batch", "ops": "{not valid json"})
+        assert r.status_code == 400
+
     def test_single_patch_if_rev_mismatch_returns_409(self, server_url):
         r = p(server_url, op="append_block", block={"para": ["x"]},
               if_rev="r999")
@@ -604,6 +619,70 @@ class TestBatchOp:
             headers={"If-Match": f'"{info["rev"]}"'},
         )
         assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# PUT: ops-shaped payload rejection (2026-07-08 fix)
+#
+# Storing a JSON array shaped like an ops/patch payload (e.g. via `notes load`
+# given an ops file by mistake) previously succeeded silently, then left the
+# key permanently unpatchable ("document is not a JSON object") with no clear
+# cause. Other non-dict JSON must still be storable -- this only blocks the
+# specific ops-shaped corruption pattern.
+# ---------------------------------------------------------------------------
+
+class TestPutOpsShapeRejection:
+
+    KEY = "_test/patch/put-ops-shape"
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self, server_url):
+        yield
+        requests.delete(f"{server_url}/{self.KEY}")
+
+    def test_ops_shaped_list_rejected(self, server_url):
+        payload = [{"op": "upsert", "name": "x", "content": []}]
+        r = requests.put(f"{server_url}/{self.KEY}", json=payload)
+        assert r.status_code == 400
+        assert "op" in r.json()["detail"]
+
+    def test_ops_shaped_list_not_stored(self, server_url):
+        payload = [{"op": "upsert", "name": "x", "content": []}]
+        requests.put(f"{server_url}/{self.KEY}", json=payload)
+        assert requests.get(f"{server_url}/{self.KEY}").status_code == 404
+
+    def test_rejection_does_not_clobber_existing_value(self, server_url):
+        requests.put(f"{server_url}/{self.KEY}", json=BASE_DOC)
+        bad_payload = [{"op": "upsert", "name": "x", "content": []}]
+        r = requests.put(f"{server_url}/{self.KEY}", json=bad_payload)
+        assert r.status_code == 400
+        assert requests.get(f"{server_url}/{self.KEY}").json() == BASE_DOC
+
+    def test_plain_list_of_numbers_still_allowed(self, server_url):
+        r = requests.put(f"{server_url}/{self.KEY}", json=[1, 2, 3])
+        assert r.status_code == 200
+        assert requests.get(f"{server_url}/{self.KEY}").json() == [1, 2, 3]
+
+    def test_empty_list_still_allowed(self, server_url):
+        r = requests.put(f"{server_url}/{self.KEY}", json=[])
+        assert r.status_code == 200
+
+    def test_list_of_dicts_without_op_key_still_allowed(self, server_url):
+        r = requests.put(f"{server_url}/{self.KEY}", json=[{"foo": 1}])
+        assert r.status_code == 200
+        assert requests.get(f"{server_url}/{self.KEY}").json() == [{"foo": 1}]
+
+    def test_plain_string_value_still_allowed(self, server_url):
+        r = requests.put(f"{server_url}/{self.KEY}", json="just a string")
+        assert r.status_code == 200
+
+    def test_invalid_json_body_rejected(self, server_url):
+        r = requests.put(
+            f"{server_url}/{self.KEY}",
+            data="{not json}",
+            headers={"Content-Type": "application/json"},
+        )
+        assert r.status_code == 400
 
 
 # ---------------------------------------------------------------------------

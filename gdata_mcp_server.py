@@ -846,9 +846,9 @@ async def db_patch(db_path: str, key: str, body: dict) -> dict:
             ops = body.get('ops')
             if isinstance(ops, str):
                 try:
-                    ops = json.loads(ops)
-                except json.JSONDecodeError:
-                    raise fastapi.HTTPException(status_code=400, detail="'ops' could not be parsed as JSON")
+                    ops = _parse_json_robust(ops)
+                except json.JSONDecodeError as e:
+                    raise fastapi.HTTPException(status_code=400, detail=f"'ops' could not be parsed as JSON: {e}")
             if not isinstance(ops, list) or not ops:
                 raise fastapi.HTTPException(status_code=400, detail="'ops' must be a non-empty list")
 
@@ -1274,9 +1274,9 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
                 if isinstance(ops, str):
                     try:
                         ops = _parse_json_robust(ops)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as e:
                         return [types.TextContent(type="text", text=json.dumps(
-                            _mcp_error("'ops' could not be parsed as JSON")))]
+                            _mcp_error(f"'ops' could not be parsed as JSON: {e}")))]
                 if_rev = arguments.get("if_rev") or None
                 body = {"op": "batch", "ops": ops}
                 if if_rev:
@@ -1291,9 +1291,9 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
                 if isinstance(order, str):
                     try:
                         order = _parse_json_robust(order)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as e:
                         return [types.TextContent(type="text", text=json.dumps(
-                            _mcp_error("'order' could not be parsed as JSON")))]
+                            _mcp_error(f"'order' could not be parsed as JSON: {e}")))]
                 if_rev = arguments.get("if_rev") or None
                 body = {"op": "reorder", "order": order}
                 if if_rev:
