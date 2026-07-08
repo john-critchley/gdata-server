@@ -56,25 +56,28 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _parse_json_robust(text: str):
-    """Parse JSON string robustly, handling common escaping issues.
-    
-    Tries standard JSON parsing first. If that fails due to shell-escaped
-    apostrophes (e.g., \' from shell escaping), tries to unescape them.
-    Apostrophes should never appear escaped in JSON — they're literal chars.
+    """Parse a client-supplied JSON string, tolerating one common mistake:
+    escaping apostrophes as \\' inside string values (e.g. "I\\'ll"). \\' is
+    never valid JSON -- the only recognised escapes are \\" \\\\ \\/ \\b \\f
+    \\n \\r \\t and \\uXXXX -- so any occurrence can be safely unescaped to a
+    literal apostrophe and re-parsed.
+
+    Mirrors gdata_server.py's _parse_json_robust -- keep in sync.
     """
     try:
         return json.loads(text)
-    except json.JSONDecodeError as e:
-        # If error mentions \' invalid escape, try unescaping it
-        if r"\'" in text or "\\\'" in text:
-            try:
-                # Replace shell-escaped apostrophes with literal apostrophes
-                unescaped = text.replace("\\'", "'")
-                return json.loads(unescaped)
-            except json.JSONDecodeError:
-                # Still failed, re-raise original error
-                raise e
-        raise
+    except json.JSONDecodeError as first_error:
+        if "\\'" not in text:
+            raise
+        unescaped = text.replace("\\'", "'")
+        try:
+            return json.loads(unescaped)
+        except json.JSONDecodeError as second_error:
+            raise json.JSONDecodeError(
+                f"invalid JSON, and apostrophe-unescape repair did not fix it "
+                f"(original error: {first_error}; after unescaping \\': {second_error})",
+                second_error.doc, second_error.pos
+            ) from first_error
 
 # ---------------------------------------------------------------------------
 # DB singleton + lock
@@ -724,14 +727,30 @@ async def db_put(db_path: str, key: str, value_json: str, if_rev: str | None = N
                     detail=f"revision mismatch: expected {if_rev!r}, current rev is {current_rev!r}"
                 )
 
-        db[key] = value_json
-
         try:
             doc = json.loads(value_json)
-            content = doc.get('content', []) if isinstance(doc, dict) else []
-            if not isinstance(content, list):
-                content = []
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            raise fastapi.HTTPException(status_code=400, detail=f"invalid JSON: {e}")
+
+        # Storing arbitrary JSON (lists, strings, numbers) is intentionally
+        # supported -- this is a general KV store, not JSONHTL-only. But a
+        # list shaped like an ops/patch payload (e.g. from `notes load` given
+        # an ops file by mistake) would silently and permanently break this
+        # key for future patch calls, so reject that specific shape.
+        if isinstance(doc, list) and doc and isinstance(doc[0], dict) and 'op' in doc[0]:
+            raise fastapi.HTTPException(
+                status_code=400,
+                detail=(
+                    "value looks like an ops/patch payload (a list of objects with an 'op' key), "
+                    "not a document -- storing it as-is would permanently break patch on this key. "
+                    "Use patch/batch to apply ops, or store a plain document/value instead."
+                ),
+            )
+
+        db[key] = value_json
+
+        content = doc.get('content', []) if isinstance(doc, dict) else []
+        if not isinstance(content, list):
             content = []
 
         new_sidecar = {
