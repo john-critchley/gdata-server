@@ -144,6 +144,9 @@ class _MCP:
     def _keys(self, server_url) -> list:
         return self._call(server_url, "keys", {})["keys"]
 
+    def _outline(self, server_url, key: str, **kw) -> dict:
+        return self._call(server_url, "outline", {"key": key, **kw})
+
     def _patch(self, server_url, key: str, **kw) -> dict:
         return self._call(server_url, "patch", {"key": key, **kw})
 
@@ -191,6 +194,46 @@ class TestGet(_MCP):
         r = self._get(server_url, self.KEY)
         assert r == [1, "two", None]
         self._delete(server_url, self.KEY)
+
+
+class TestOutline(_MCP):
+    KEY = f"{BASE}/outline"
+
+    DOC = {
+        "title": "Outline",
+        "content": [
+            {"heading": {"level": 1, "text": "Heading One"}},
+            {"para": ["A paragraph with ", {"code": "inline code"}, " and a ", {"link": {"href": "README", "text": "link"}}, "."]},
+            {"codeblock": {"lang": "python", "body": "print('hello')\nprint('world')"}},
+            {"table": {"caption": "People", "columns": ["Name", "Age"], "rows": [["Ada", 36]]}},
+        ],
+    }
+
+    def test_outline_returns_ids_types_and_previews(self, server_url):
+        info = self._put(server_url, self.KEY, self.DOC)
+        r = self._outline(server_url, self.KEY)
+        assert r["rev"] == info["rev"]
+        assert [b["id"] for b in r["blocks"]] == info["block_ids"]
+        assert [(b["index"], b["type"], b["preview"]) for b in r["blocks"]] == [
+            (0, "heading", "Heading One"),
+            (1, "para", "A paragraph with inline code and a link."),
+            (2, "codeblock", "print('hello') print('world')"),
+            (3, "table", "People Name Age"),
+        ]
+        self._delete(server_url, self.KEY)
+
+    def test_outline_preview_chars_truncates_and_does_not_write(self, server_url):
+        info = self._put(server_url, self.KEY, self.DOC)
+        r = self._outline(server_url, self.KEY, preview_chars=12)
+        assert r["blocks"][1]["preview"] == "A paragraph…"
+        after = self._get(server_url, self.KEY, include_block_ids=True)
+        assert after["rev"] == info["rev"]
+        assert after["document"] == self.DOC
+        self._delete(server_url, self.KEY)
+
+    def test_outline_missing_key_returns_error(self, server_url):
+        r = self._outline(server_url, f"{BASE}/missing-outline")
+        assert "error" in r
 
 
 # ---------------------------------------------------------------------------

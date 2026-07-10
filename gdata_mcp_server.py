@@ -56,25 +56,28 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _parse_json_robust(text: str):
-    """Parse JSON string robustly, handling common escaping issues.
-    
-    Tries standard JSON parsing first. If that fails due to shell-escaped
-    apostrophes (e.g., \' from shell escaping), tries to unescape them.
-    Apostrophes should never appear escaped in JSON — they're literal chars.
+    """Parse a client-supplied JSON string, tolerating one common mistake:
+    escaping apostrophes as \\' inside string values (e.g. "I\\'ll"). \\' is
+    never valid JSON -- the only recognised escapes are \\" \\\\ \\/ \\b \\f
+    \\n \\r \\t and \\uXXXX -- so any occurrence can be safely unescaped to a
+    literal apostrophe and re-parsed.
+
+    Mirrors gdata_server.py's _parse_json_robust -- keep in sync.
     """
     try:
         return json.loads(text)
-    except json.JSONDecodeError as e:
-        # If error mentions \' invalid escape, try unescaping it
-        if r"\'" in text or "\\\'" in text:
-            try:
-                # Replace shell-escaped apostrophes with literal apostrophes
-                unescaped = text.replace("\\'", "'")
-                return json.loads(unescaped)
-            except json.JSONDecodeError:
-                # Still failed, re-raise original error
-                raise e
-        raise
+    except json.JSONDecodeError as first_error:
+        if "\\'" not in text:
+            raise
+        unescaped = text.replace("\\'", "'")
+        try:
+            return json.loads(unescaped)
+        except json.JSONDecodeError as second_error:
+            raise json.JSONDecodeError(
+                f"invalid JSON, and apostrophe-unescape repair did not fix it "
+                f"(original error: {first_error}; after unescaping \\': {second_error})",
+                second_error.doc, second_error.pos
+            ) from first_error
 
 # ---------------------------------------------------------------------------
 # DB singleton + lock
@@ -133,6 +136,88 @@ def _get_or_create_sidecar(db, key: str, content: list) -> dict:
         sidecar['block_ids'] = [_new_block_id() for _ in content]
         _save_sidecar(db, key, sidecar)
     return sidecar
+
+
+def _inline_plain_text(value) -> str:
+    """Return a compact plain-text representation of a JSONHTL inline value."""
+    if value is None:
+        return ''
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return ''.join(_inline_plain_text(item) for item in value)
+    if isinstance(value, dict):
+        if 'link' in value:
+            link = value['link']
+            if isinstance(link, dict):
+                return str(link.get('text') or link.get('href') or '')
+        for key in ('code', 'em', 'strong', 'bold', 'italic'):
+            if key in value:
+                return _inline_plain_text(value[key])
+        return ' '.join(_inline_plain_text(v) for v in value.values())
+    return str(value)
+
+
+def _block_type(block) -> str:
+    if isinstance(block, str):
+        return 'para'
+    if isinstance(block, dict) and len(block) == 1:
+        return next(iter(block))
+    if isinstance(block, dict):
+        for key in ('heading', 'para', 'list', 'codeblock', 'pre', 'table'):
+            if key in block:
+                return key
+    return type(block).__name__
+
+
+def _block_plain_text(block) -> str:
+    if isinstance(block, str):
+        return block
+    if not isinstance(block, dict):
+        return str(block)
+    if 'heading' in block and isinstance(block['heading'], dict):
+        return str(block['heading'].get('text', ''))
+    if 'para' in block:
+        return _inline_plain_text(block['para'])
+    if 'list' in block and isinstance(block['list'], dict):
+        items = block['list'].get('items', [])
+        return ' '.join(_inline_plain_text(item) for item in items)
+    if 'codeblock' in block and isinstance(block['codeblock'], dict):
+        return str(block['codeblock'].get('body', ''))
+    if 'pre' in block:
+        return str(block['pre'])
+    if 'table' in block and isinstance(block['table'], dict):
+        table = block['table']
+        caption = table.get('caption')
+        columns = table.get('columns', [])
+        parts = []
+        if caption:
+            parts.append(str(caption))
+        if columns:
+            parts.append(' '.join(str(c) for c in columns))
+        return ' '.join(parts)
+    return _inline_plain_text(block)
+
+
+def _preview_text(text: str, limit: int = 80) -> str:
+    text = ' '.join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[:max(0, limit - 1)].rstrip() + '…'
+
+
+def _build_outline(doc: dict, block_ids: list, preview_chars: int = 80) -> list:
+    content = doc.get('content')
+    blocks = content if isinstance(content, list) else []
+    return [
+        {
+            'id': block_ids[i],
+            'index': i,
+            'type': _block_type(block),
+            'preview': _preview_text(_block_plain_text(block), preview_chars),
+        }
+        for i, block in enumerate(blocks)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -694,7 +779,7 @@ def _apply_op(op_body: dict, doc: dict, block_ids: list) -> dict:
         detail=(
             f"unknown op: {op!r}. Supported: append_block, insert_block, replace_block, "
             "delete_block, delete_blocks, patch_meta, insert_before, insert_after, "
-            "reorder, batch, get_with_block_ids, table.*"
+            "reorder, batch, get_with_block_ids, outline, table.*"
         )
     )
 
@@ -724,14 +809,30 @@ async def db_put(db_path: str, key: str, value_json: str, if_rev: str | None = N
                     detail=f"revision mismatch: expected {if_rev!r}, current rev is {current_rev!r}"
                 )
 
-        db[key] = value_json
-
         try:
             doc = json.loads(value_json)
-            content = doc.get('content', []) if isinstance(doc, dict) else []
-            if not isinstance(content, list):
-                content = []
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            raise fastapi.HTTPException(status_code=400, detail=f"invalid JSON: {e}")
+
+        # Storing arbitrary JSON (lists, strings, numbers) is intentionally
+        # supported -- this is a general KV store, not JSONHTL-only. But a
+        # list shaped like an ops/patch payload (e.g. from `notes load` given
+        # an ops file by mistake) would silently and permanently break this
+        # key for future patch calls, so reject that specific shape.
+        if isinstance(doc, list) and doc and isinstance(doc[0], dict) and 'op' in doc[0]:
+            raise fastapi.HTTPException(
+                status_code=400,
+                detail=(
+                    "value looks like an ops/patch payload (a list of objects with an 'op' key), "
+                    "not a document -- storing it as-is would permanently break patch on this key. "
+                    "Use patch/batch to apply ops, or store a plain document/value instead."
+                ),
+            )
+
+        db[key] = value_json
+
+        content = doc.get('content', []) if isinstance(doc, dict) else []
+        if not isinstance(content, list):
             content = []
 
         new_sidecar = {
@@ -804,6 +905,14 @@ async def db_patch(db_path: str, key: str, body: dict) -> dict:
             blocks = content if isinstance(content, list) else []
             sidecar = _get_or_create_sidecar(db, key, blocks)
             return {'document': doc, 'rev': sidecar['rev'], 'block_ids': sidecar['block_ids']}
+        if op == 'outline':
+            content = doc.get('content')
+            blocks = content if isinstance(content, list) else []
+            sidecar = _get_or_create_sidecar(db, key, blocks)
+            preview_chars = body.get('preview_chars', 80)
+            if not isinstance(preview_chars, int) or preview_chars < 1:
+                raise fastapi.HTTPException(status_code=400, detail="'preview_chars' must be a positive integer")
+            return {'rev': sidecar['rev'], 'blocks': _build_outline(doc, sidecar['block_ids'], preview_chars)}
 
         # --- Concurrency guard ---
         if_rev = body.get('if_rev')
@@ -827,9 +936,9 @@ async def db_patch(db_path: str, key: str, body: dict) -> dict:
             ops = body.get('ops')
             if isinstance(ops, str):
                 try:
-                    ops = json.loads(ops)
-                except json.JSONDecodeError:
-                    raise fastapi.HTTPException(status_code=400, detail="'ops' could not be parsed as JSON")
+                    ops = _parse_json_robust(ops)
+                except json.JSONDecodeError as e:
+                    raise fastapi.HTTPException(status_code=400, detail=f"'ops' could not be parsed as JSON: {e}")
             if not isinstance(ops, list) or not ops:
                 raise fastapi.HTTPException(status_code=400, detail="'ops' must be a non-empty list")
 
@@ -1024,6 +1133,25 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
                         },
                     },
                     "required": ["key", "value"],
+                },
+            ),
+            types.Tool(
+                name="outline",
+                description=(
+                    "Return a compact block outline for a JSONHTL note: {rev, blocks:[{id,index,type,preview}, ...]}. "
+                    "Use this to choose a block_id without reading or aligning the full document sidecar. "
+                    "The preview is plain text extracted from the block and truncated to preview_chars characters."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string", "description": "The key/path of the document to outline"},
+                        "preview_chars": {
+                            "type": "integer",
+                            "description": "Maximum preview length per block. Default 80.",
+                        },
+                    },
+                    "required": ["key"],
                 },
             ),
             types.Tool(
@@ -1234,10 +1362,19 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
                 result = {"status": "deleted"} if deleted else _mcp_error(f"key not found: {key}")
             elif name == "keys":
                 result = {"keys": await db_keys(db_path)}
+            elif name == "outline":
+                key = arguments["key"]
+                body = {"op": "outline"}
+                if "preview_chars" in arguments:
+                    body["preview_chars"] = arguments["preview_chars"]
+                try:
+                    result = await db_patch(db_path, key, body)
+                except fastapi.HTTPException as e:
+                    result = _mcp_error(e.detail, e.status_code)
             elif name == "patch":
                 key = arguments["key"]
                 body = {k: arguments[k] for k in
-                        ("op", "block_id", "block", "index", "indices", "fields", "if_rev")
+                        ("op", "block_id", "block", "index", "indices", "fields", "if_rev", "preview_chars")
                         if k in arguments}
                 for field in ("block", "fields"):
                     if isinstance(body.get(field), str):
@@ -1255,9 +1392,9 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
                 if isinstance(ops, str):
                     try:
                         ops = _parse_json_robust(ops)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as e:
                         return [types.TextContent(type="text", text=json.dumps(
-                            _mcp_error("'ops' could not be parsed as JSON")))]
+                            _mcp_error(f"'ops' could not be parsed as JSON: {e}")))]
                 if_rev = arguments.get("if_rev") or None
                 body = {"op": "batch", "ops": ops}
                 if if_rev:
@@ -1272,9 +1409,9 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
                 if isinstance(order, str):
                     try:
                         order = _parse_json_robust(order)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as e:
                         return [types.TextContent(type="text", text=json.dumps(
-                            _mcp_error("'order' could not be parsed as JSON")))]
+                            _mcp_error(f"'order' could not be parsed as JSON: {e}")))]
                 if_rev = arguments.get("if_rev") or None
                 body = {"op": "reorder", "order": order}
                 if if_rev:

@@ -66,6 +66,88 @@ def _get_or_create_sidecar(db, key: str, content: list) -> dict:
     return sidecar
 
 
+def _inline_plain_text(value) -> str:
+    """Return a compact plain-text representation of a JSONHTL inline value."""
+    if value is None:
+        return ''
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return ''.join(_inline_plain_text(item) for item in value)
+    if isinstance(value, dict):
+        if 'link' in value:
+            link = value['link']
+            if isinstance(link, dict):
+                return str(link.get('text') or link.get('href') or '')
+        for key in ('code', 'em', 'strong', 'bold', 'italic'):
+            if key in value:
+                return _inline_plain_text(value[key])
+        return ' '.join(_inline_plain_text(v) for v in value.values())
+    return str(value)
+
+
+def _block_type(block) -> str:
+    if isinstance(block, str):
+        return 'para'
+    if isinstance(block, dict) and len(block) == 1:
+        return next(iter(block))
+    if isinstance(block, dict):
+        for key in ('heading', 'para', 'list', 'codeblock', 'pre', 'table'):
+            if key in block:
+                return key
+    return type(block).__name__
+
+
+def _block_plain_text(block) -> str:
+    if isinstance(block, str):
+        return block
+    if not isinstance(block, dict):
+        return str(block)
+    if 'heading' in block and isinstance(block['heading'], dict):
+        return str(block['heading'].get('text', ''))
+    if 'para' in block:
+        return _inline_plain_text(block['para'])
+    if 'list' in block and isinstance(block['list'], dict):
+        items = block['list'].get('items', [])
+        return ' '.join(_inline_plain_text(item) for item in items)
+    if 'codeblock' in block and isinstance(block['codeblock'], dict):
+        return str(block['codeblock'].get('body', ''))
+    if 'pre' in block:
+        return str(block['pre'])
+    if 'table' in block and isinstance(block['table'], dict):
+        table = block['table']
+        caption = table.get('caption')
+        columns = table.get('columns', [])
+        parts = []
+        if caption:
+            parts.append(str(caption))
+        if columns:
+            parts.append(' '.join(str(c) for c in columns))
+        return ' '.join(parts)
+    return _inline_plain_text(block)
+
+
+def _preview_text(text: str, limit: int = 80) -> str:
+    text = ' '.join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[:max(0, limit - 1)].rstrip() + '…'
+
+
+def _build_outline(doc: dict, block_ids: list, preview_chars: int = 80) -> list:
+    content = doc.get('content')
+    blocks = content if isinstance(content, list) else []
+    return [
+        {
+            'id': block_ids[i],
+            'index': i,
+            'type': _block_type(block),
+            'preview': _preview_text(_block_plain_text(block), preview_chars),
+        }
+        for i, block in enumerate(blocks)
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Table-op helpers
 # ---------------------------------------------------------------------------
@@ -575,7 +657,7 @@ def _apply_op(op_body: dict, doc: dict, block_ids: list) -> dict:
         detail=(
             f"unknown op: {op!r}. Supported: append_block, insert_block, replace_block, "
             "delete_block, delete_blocks, patch_meta, insert_before, insert_after, "
-            "batch, get_with_block_ids, table.*"
+            "batch, get_with_block_ids, outline, table.*"
         )
     )
 
@@ -750,6 +832,17 @@ def handle_PATCH_DOC_request(path: str, body: dict, if_match: str | None = None)
                 'document': doc,
                 'rev': sidecar['rev'],
                 'block_ids': sidecar['block_ids'],
+            }
+        if op == 'outline':
+            content = doc.get('content')
+            blocks = content if isinstance(content, list) else []
+            sidecar = _get_or_create_sidecar(db, key, blocks)
+            preview_chars = body.get('preview_chars', 80)
+            if not isinstance(preview_chars, int) or preview_chars < 1:
+                raise fastapi.HTTPException(status_code=400, detail="'preview_chars' must be a positive integer")
+            return {
+                'rev': sidecar['rev'],
+                'blocks': _build_outline(doc, sidecar['block_ids'], preview_chars),
             }
 
         # --- Concurrency guard (if_rev in body takes precedence over If-Match header) ---

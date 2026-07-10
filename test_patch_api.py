@@ -381,6 +381,34 @@ class TestSidecarAndBlockIds:
         assert body["rev"].startswith("r")
         assert len(body["block_ids"]) == 3
 
+    def test_outline_returns_ids_with_context(self, server_url):
+        r = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "outline"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["rev"].startswith("r")
+        assert body["blocks"] == [
+            {"id": body["blocks"][0]["id"], "index": 0, "type": "heading", "preview": "Title"},
+            {"id": body["blocks"][1]["id"], "index": 1, "type": "para", "preview": "First paragraph."},
+            {"id": body["blocks"][2]["id"], "index": 2, "type": "para", "preview": "Second paragraph."},
+        ]
+        assert all(len(block["id"]) == 6 for block in body["blocks"])
+
+    def test_outline_uses_same_ids_and_rev_as_get_with_block_ids(self, server_url):
+        ids = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "get_with_block_ids"}).json()
+        outline = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "outline"}).json()
+        assert outline["rev"] == ids["rev"]
+        assert [block["id"] for block in outline["blocks"]] == ids["block_ids"]
+
+    def test_outline_preview_chars_truncates_without_writing(self, server_url):
+        before = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "get_with_block_ids"}).json()
+        r = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "outline", "preview_chars": 6})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["blocks"][1]["preview"] == "First…"
+        after = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "get_with_block_ids"}).json()
+        assert after["rev"] == before["rev"]
+        assert after["document"] == before["document"]
+
     def test_block_ids_stable_across_reads(self, server_url):
         r1 = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "get_with_block_ids"}).json()
         r2 = requests.post(f"{server_url}/{TEST_KEY}", json={"op": "get_with_block_ids"}).json()
