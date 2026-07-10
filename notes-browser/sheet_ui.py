@@ -8,6 +8,8 @@ Classes:
 """
 
 import datetime
+import base64
+import io
 import json
 import os
 import re
@@ -354,6 +356,16 @@ class SheetCellPanel(wx.Panel):
             plot_panel = _PlotPanel(self.output_host, item)
             sizer.Add(plot_panel, 0, wx.EXPAND | wx.TOP, 4)
             self.sheet_panel._bind_mousewheel_chain(plot_panel)
+        elif isinstance(item, dict) and item.get('kind') == 'image':
+            if item.get('format') != 'png':
+                raise ValueError(f"Unsupported image format: {item.get('format')!r}")
+            png_bytes = base64.b64decode(item.get('data', ''))
+            image = wx.Image(io.BytesIO(png_bytes), wx.BITMAP_TYPE_PNG)
+            bitmap = wx.Bitmap(image)
+            image_ctrl = wx.StaticBitmap(self.output_host, bitmap=bitmap)
+            image_ctrl.SetMinSize((image.GetWidth(), image.GetHeight()))
+            sizer.Add(image_ctrl, 0, wx.TOP, 4)
+            self.sheet_panel._bind_mousewheel_chain(image_ctrl)
         elif isinstance(item, dict) and item.get('kind') == 'html':
             htmlwin = wx.html.HtmlWindow(self.output_host, style=wx.BORDER_SIMPLE)
             htmlwin.SetMinSize((-1, 300))
@@ -729,6 +741,15 @@ class RunnableSheetPanel(wx.Panel):
         target_y = max(0, virt_top - 20)
         self.scroller.Scroll(0, target_y // (ppuy or 1))
 
+    def _scroll_cell_into_view_after_layout(self, cell_id):
+        """Scroll after output/layout changes have had a chance to settle."""
+        def _scroll():
+            self.Layout()
+            self.scroller.Layout()
+            self.scroller.FitInside()
+            self.scroll_cell_into_view(cell_id)
+        wx.CallAfter(_scroll)
+
     def run_cell(self, cell_id, scroll=True):
         if self.is_running:
             return
@@ -746,6 +767,8 @@ class RunnableSheetPanel(wx.Panel):
             output, error, ok, show_items = self.kernel.run_cell(cell_id, cell['body'], panel.get_input_values())
             panel.set_output(output, error, ok, show_items)
             panel.set_status('Done' if ok else 'Error')
+            if scroll:
+                self._scroll_cell_into_view_after_layout(cell_id)
         finally:
             panel.set_running(False)
             self.is_running = False
@@ -774,6 +797,8 @@ class RunnableSheetPanel(wx.Panel):
                 output, error, ok, show_items = self.kernel.run_cell(cell_id, cell['body'], panel.get_input_values())
                 panel.set_output(output, error, ok, show_items)
                 panel.set_status('Done' if ok else 'Error')
+                if scroll:
+                    self._scroll_cell_into_view_after_layout(cell_id)
                 panel.set_running(False)
                 wx.YieldIfNeeded()
                 if not ok:

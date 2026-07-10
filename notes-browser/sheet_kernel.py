@@ -1,4 +1,5 @@
 import ast
+import base64
 import builtins
 import code
 import contextlib
@@ -131,6 +132,19 @@ class HtmlOutput:
 
     def __show__(self):
         return {'kind': 'html', 'content': self._html}
+
+
+class ImageOutput:
+    """Wrap PNG bytes for display in a cell output panel."""
+    def __init__(self, png_bytes: bytes):
+        self._png_bytes = bytes(png_bytes)
+
+    def __show__(self):
+        return {
+            'kind': 'image',
+            'format': 'png',
+            'data': base64.b64encode(self._png_bytes).decode('ascii'),
+        }
 
 
 class _ShowCollector:
@@ -307,7 +321,17 @@ def _make_show_func(collector: "_ShowCollector"):
                 return
         except ImportError:
             pass
-        # 4. fallback: str()
+        # 4. matplotlib Figure
+        try:
+            from matplotlib.figure import Figure as _MplFigure
+            if isinstance(obj, _MplFigure):
+                buf = io.BytesIO()
+                obj.savefig(buf, format='png', bbox_inches='tight', dpi=120)
+                collector.append(ImageOutput(buf.getvalue()).__show__())
+                return
+        except ImportError:
+            pass
+        # 5. fallback: str()
         try:
             collector.append(str(obj))
         except Exception as exc:
@@ -435,7 +459,8 @@ class SheetKernel:
                      patched_input(input_shim), \
                      patched_builtin("show", show_func), \
                      patched_builtin("plot", plot_func), \
-                     patched_builtin("HtmlOutput", HtmlOutput):
+                     patched_builtin("HtmlOutput", HtmlOutput), \
+                     patched_builtin("ImageOutput", ImageOutput):
                     try:
                         exec(code_obj, self.namespace, self.namespace)
                     except BaseException as exc:

@@ -887,21 +887,37 @@ class NotesBrowser(wx.Frame):
             self.Layout()
             self.Refresh()
             self.Update()
+            wx.YieldIfNeeded()
         except Exception:
             pass
 
     def _capture_window_bitmap(self):
         """Capture current frame client area into a wx.Bitmap."""
-        w, h = self.GetClientSize()
-        if w <= 0 or h <= 0:
-            raise RuntimeError('Window has invalid size for screenshot')
+        try:
+            if self.IsIconized():
+                self.Iconize(False)
+            self.Show(True)
+            self.Raise()
+        except Exception:
+            pass
 
         self._flush_ui_updates()
+
+        w, h = self.GetClientSize()
+        dc_factory = wx.ClientDC
+        if w <= 0 or h <= 0:
+            # Some X11/window-manager states report a zero client area even
+            # when the frame has a real size. Fall back to the full window DC
+            # so control-socket screenshots still work for automation.
+            w, h = self.GetSize()
+            dc_factory = wx.WindowDC
+        if w <= 0 or h <= 0:
+            raise RuntimeError('Window has invalid size for screenshot')
 
         bitmap = wx.Bitmap(w, h)
         mem = wx.MemoryDC(bitmap)
         try:
-            mem.Blit(0, 0, w, h, wx.ClientDC(self), 0, 0)
+            mem.Blit(0, 0, w, h, dc_factory(self), 0, 0)
         finally:
             mem.SelectObject(wx.NullBitmap)
         return bitmap
