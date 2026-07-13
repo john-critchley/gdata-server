@@ -11,6 +11,12 @@ Transport flags (env vars, default both enabled):
   MCP_STREAMABLE=true|false   enable Streamable HTTP (POST /mcp/)
 
 All db access is serialised via a single asyncio.Lock.
+
+Notes (public store):
+  gdata-server           — system overview and sub-page index
+  gdata-server/mcp-server — MCP tools reference, OAuth setup, usage
+  gdata-server/server    — HTTP/REST API reference
+  mcp-conventions        — principle: include notes key in every tool description
 """
 
 import argparse
@@ -136,6 +142,88 @@ def _get_or_create_sidecar(db, key: str, content: list) -> dict:
         sidecar['block_ids'] = [_new_block_id() for _ in content]
         _save_sidecar(db, key, sidecar)
     return sidecar
+
+
+def _inline_plain_text(value) -> str:
+    """Return a compact plain-text representation of a JSONHTL inline value."""
+    if value is None:
+        return ''
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return ''.join(_inline_plain_text(item) for item in value)
+    if isinstance(value, dict):
+        if 'link' in value:
+            link = value['link']
+            if isinstance(link, dict):
+                return str(link.get('text') or link.get('href') or '')
+        for key in ('code', 'em', 'strong', 'bold', 'italic'):
+            if key in value:
+                return _inline_plain_text(value[key])
+        return ' '.join(_inline_plain_text(v) for v in value.values())
+    return str(value)
+
+
+def _block_type(block) -> str:
+    if isinstance(block, str):
+        return 'para'
+    if isinstance(block, dict) and len(block) == 1:
+        return next(iter(block))
+    if isinstance(block, dict):
+        for key in ('heading', 'para', 'list', 'codeblock', 'pre', 'table'):
+            if key in block:
+                return key
+    return type(block).__name__
+
+
+def _block_plain_text(block) -> str:
+    if isinstance(block, str):
+        return block
+    if not isinstance(block, dict):
+        return str(block)
+    if 'heading' in block and isinstance(block['heading'], dict):
+        return str(block['heading'].get('text', ''))
+    if 'para' in block:
+        return _inline_plain_text(block['para'])
+    if 'list' in block and isinstance(block['list'], dict):
+        items = block['list'].get('items', [])
+        return ' '.join(_inline_plain_text(item) for item in items)
+    if 'codeblock' in block and isinstance(block['codeblock'], dict):
+        return str(block['codeblock'].get('body', ''))
+    if 'pre' in block:
+        return str(block['pre'])
+    if 'table' in block and isinstance(block['table'], dict):
+        table = block['table']
+        caption = table.get('caption')
+        columns = table.get('columns', [])
+        parts = []
+        if caption:
+            parts.append(str(caption))
+        if columns:
+            parts.append(' '.join(str(c) for c in columns))
+        return ' '.join(parts)
+    return _inline_plain_text(block)
+
+
+def _preview_text(text: str, limit: int = 80) -> str:
+    text = ' '.join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[:max(0, limit - 1)].rstrip() + '…'
+
+
+def _build_outline(doc: dict, block_ids: list, preview_chars: int = 80) -> list:
+    content = doc.get('content')
+    blocks = content if isinstance(content, list) else []
+    return [
+        {
+            'id': block_ids[i],
+            'index': i,
+            'type': _block_type(block),
+            'preview': _preview_text(_block_plain_text(block), preview_chars),
+        }
+        for i, block in enumerate(blocks)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -697,7 +785,7 @@ def _apply_op(op_body: dict, doc: dict, block_ids: list) -> dict:
         detail=(
             f"unknown op: {op!r}. Supported: append_block, insert_block, replace_block, "
             "delete_block, delete_blocks, patch_meta, insert_before, insert_after, "
-            "reorder, batch, get_with_block_ids, table.*"
+            "reorder, batch, get_with_block_ids, outline, table.*"
         )
     )
 
@@ -823,6 +911,14 @@ async def db_patch(db_path: str, key: str, body: dict) -> dict:
             blocks = content if isinstance(content, list) else []
             sidecar = _get_or_create_sidecar(db, key, blocks)
             return {'document': doc, 'rev': sidecar['rev'], 'block_ids': sidecar['block_ids']}
+        if op == 'outline':
+            content = doc.get('content')
+            blocks = content if isinstance(content, list) else []
+            sidecar = _get_or_create_sidecar(db, key, blocks)
+            preview_chars = body.get('preview_chars', 80)
+            if not isinstance(preview_chars, int) or preview_chars < 1:
+                raise fastapi.HTTPException(status_code=400, detail="'preview_chars' must be a positive integer")
+            return {'rev': sidecar['rev'], 'blocks': _build_outline(doc, sidecar['block_ids'], preview_chars)}
 
         # --- Concurrency guard ---
         if_rev = body.get('if_rev')
@@ -1046,6 +1142,25 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
                 },
             ),
             types.Tool(
+                name="outline",
+                description=(
+                    "Return a compact block outline for a JSONHTL note: {rev, blocks:[{id,index,type,preview}, ...]}. "
+                    "Use this to choose a block_id without reading or aligning the full document sidecar. "
+                    "The preview is plain text extracted from the block and truncated to preview_chars characters."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string", "description": "The key/path of the document to outline"},
+                        "preview_chars": {
+                            "type": "integer",
+                            "description": "Maximum preview length per block. Default 80.",
+                        },
+                    },
+                    "required": ["key"],
+                },
+            ),
+            types.Tool(
                 name="delete",
                 description="Delete a key.",
                 inputSchema={
@@ -1205,8 +1320,9 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
             ),
         ]
         _prefix = f"[{store_name} store] "
+        _suffix = " Usage notes: gdata-server/mcp-server (public notes store)"
         for _t in tools:
-            _t.description = _prefix + _t.description
+            _t.description = _prefix + _t.description + _suffix
         return tools
 
     @server.call_tool()
@@ -1253,10 +1369,19 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
                 result = {"status": "deleted"} if deleted else _mcp_error(f"key not found: {key}")
             elif name == "keys":
                 result = {"keys": await db_keys(db_path)}
+            elif name == "outline":
+                key = arguments["key"]
+                body = {"op": "outline"}
+                if "preview_chars" in arguments:
+                    body["preview_chars"] = arguments["preview_chars"]
+                try:
+                    result = await db_patch(db_path, key, body)
+                except fastapi.HTTPException as e:
+                    result = _mcp_error(e.detail, e.status_code)
             elif name == "patch":
                 key = arguments["key"]
                 body = {k: arguments[k] for k in
-                        ("op", "block_id", "block", "index", "indices", "fields", "if_rev")
+                        ("op", "block_id", "block", "index", "indices", "fields", "if_rev", "preview_chars")
                         if k in arguments}
                 for field in ("block", "fields"):
                     if isinstance(body.get(field), str):
