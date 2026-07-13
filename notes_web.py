@@ -137,7 +137,15 @@ def _render_inline(item) -> str:
 def _render_inlines(items) -> str:
     if isinstance(items, str):
         items = [items]
-    return ''.join(_render_inline(i) for i in items)
+    joined = ''.join(_render_inline(i) for i in items)
+    # A **bold**/*italic* span can be split across separate string items by an
+    # intervening link/code element (e.g. "**foo " + {code} + " bar.**"). Each
+    # item is converted independently above, so any markers that didn't find
+    # their pair inside their own item are left as literal text here. Do a
+    # second pass over the joined string to catch those spanning cases.
+    joined = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', joined, flags=re.DOTALL)
+    joined = re.sub(r'\*(.+?)\*', r'<em>\1</em>', joined, flags=re.DOTALL)
+    return joined
 
 
 def _render_list_item(item) -> str:
