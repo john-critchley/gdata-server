@@ -1,4 +1,5 @@
 import ast
+import base64
 import builtins
 import code
 import contextlib
@@ -291,7 +292,21 @@ def _make_show_func(collector: "_ShowCollector"):
                 return
             collector.append(result)
             return
-        # 2. numpy ndarray
+        # 2. matplotlib/seaborn Figure — serialise to PNG, embed as a data:
+        # URI <img> JSONML node. wx.html.HtmlWindow (which renders JSONML
+        # list items — see jsonml_to_html/_append_show_item in sheet_ui.py)
+        # supports data: URIs directly, confirmed empirically.
+        try:
+            import matplotlib.figure as _mpl_figure
+            if isinstance(obj, _mpl_figure.Figure):
+                buf = io.BytesIO()
+                obj.savefig(buf, format="png")
+                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+                collector.append(["img", {"src": f"data:image/png;base64,{b64}"}])
+                return
+        except ImportError:
+            pass
+        # 3. numpy ndarray
         try:
             import numpy as _np
             if isinstance(obj, _np.ndarray):
@@ -299,7 +314,7 @@ def _make_show_func(collector: "_ShowCollector"):
                 return
         except ImportError:
             pass
-        # 3. pandas DataFrame / Series
+        # 4. pandas DataFrame / Series
         try:
             import pandas as _pd
             if isinstance(obj, (_pd.DataFrame, _pd.Series)):
@@ -307,7 +322,7 @@ def _make_show_func(collector: "_ShowCollector"):
                 return
         except ImportError:
             pass
-        # 4. fallback: str()
+        # 5. fallback: str()
         try:
             collector.append(str(obj))
         except Exception as exc:
