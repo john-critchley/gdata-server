@@ -38,6 +38,9 @@ CLIENT_SECRET = os.environ.get("OAUTH_CLIENT_SECRET", "")
 PASSWORD_HASH  = os.environ.get("OAUTH_PASSWORD",  "")
 PASSWORD_HASH2 = os.environ.get("OAUTH_PASSWORD2", "")
 ISSUER        = os.environ.get("OAUTH_ISSUER",        "https://www.critchley.biz")
+AUTHORIZATION_ENDPOINT = os.environ.get(
+    "OAUTH_AUTHORIZATION_ENDPOINT", f"{ISSUER}/oauth/authorize"
+)
 _issuer_path  = ISSUER.replace("https://", "").replace("http://", "").split("/", 1)
 _STORE_LABEL  = _issuer_path[1].strip("/") if len(_issuer_path) > 1 and _issuer_path[1].strip("/") else "notes"
 TOKEN_FILE    = os.environ.get("OAUTH_TOKEN_FILE",
@@ -295,7 +298,7 @@ async def protected_resource_metadata(path: str = ""):
 async def oauth_metadata():
     return {
         "issuer":                                ISSUER,
-        "authorization_endpoint":                f"{ISSUER}/oauth/authorize",
+        "authorization_endpoint":                AUTHORIZATION_ENDPOINT,
         "token_endpoint":                        f"{ISSUER}/oauth/token",
         "revocation_endpoint":                   f"{ISSUER}/oauth/revoke",
         "response_types_supported":              ["code"],

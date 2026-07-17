@@ -106,7 +106,6 @@ class LiveOAuthBasicAuthTest(unittest.TestCase):
         redirect_uri = "https://example.invalid/mcp-oauth-test"
         state = secrets.token_urlsafe(18)
         verifier, challenge = _pkce()
-        authorize_url = f"{BASE_URL}{prefix}/oauth/authorize"
 
         params = {
             "client_id": client_id,
@@ -118,6 +117,13 @@ class LiveOAuthBasicAuthTest(unittest.TestCase):
         }
 
         with httpx.Client(timeout=TIMEOUT, follow_redirects=False) as client:
+            metadata = client.get(
+                f"{BASE_URL}{prefix}/.well-known/oauth-authorization-server"
+            )
+            assert metadata.status_code == 200, metadata.text
+            authorize_url = metadata.json()["authorization_endpoint"]
+            assert urlparse(authorize_url).hostname == "webdav.critchley.biz"
+
             unauthenticated = client.get(authorize_url, params=params)
             assert unauthenticated.status_code == 401
             assert "Basic" in unauthenticated.headers.get("www-authenticate", "")
