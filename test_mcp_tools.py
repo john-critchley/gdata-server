@@ -293,6 +293,42 @@ class TestPut(_MCP):
         assert self._get(server_url, self.KEY) == obj
         self._delete(server_url, self.KEY)
 
+    # --- ops-shaped payload rejection (2026-07-08 fix) ---
+
+    def test_put_ops_shaped_list_rejected(self, server_url):
+        """A list shaped like an ops/patch payload must be rejected, not
+        silently stored (which previously broke patch on this key forever)."""
+        payload = [{"op": "upsert", "name": "x", "content": []}]
+        r = self._put(server_url, self.KEY, payload)
+        assert "error" in r
+        assert r.get("status_code") == 400
+        assert "op" in r["error"]
+
+    def test_put_ops_shaped_list_not_stored(self, server_url):
+        payload = [{"op": "upsert", "name": "x", "content": []}]
+        self._put(server_url, self.KEY, payload)
+        r = self._get(server_url, self.KEY)
+        assert "error" in r
+
+    def test_put_ops_shaped_string_value_rejected(self, server_url):
+        """Same rejection when value arrives as a JSON-encoded string (the
+        actual notes-load code path) rather than a native list."""
+        payload_text = json.dumps([{"op": "upsert", "name": "x", "content": []}])
+        r = self._call(server_url, "put", {"key": self.KEY, "value": payload_text})
+        assert "error" in r
+        assert r.get("status_code") == 400
+
+    def test_put_list_of_dicts_without_op_key_still_allowed(self, server_url):
+        r = self._put(server_url, self.KEY, [{"foo": 1}, {"bar": 2}])
+        assert r["status"] == "ok"
+        assert self._get(server_url, self.KEY) == [{"foo": 1}, {"bar": 2}]
+        self._delete(server_url, self.KEY)
+
+    def test_put_empty_list_still_allowed(self, server_url):
+        r = self._put(server_url, self.KEY, [])
+        assert r["status"] == "ok"
+        self._delete(server_url, self.KEY)
+
 
 # ---------------------------------------------------------------------------
 # TestDelete
@@ -499,6 +535,14 @@ class TestPatch(_MCP):
         assert r["status"] == "ok"
         assert self._content(server_url)[-1] == {"para": ["String block."]}
 
+    def test_block_as_json_string_with_escaped_apostrophe_is_repaired(self, server_url):
+        """Regression test: a client that (wrongly) escapes apostrophes as \\'
+        when building the 'block' JSON string must still succeed."""
+        block_json_text = json.dumps({"para": ["I'll do this"]}).replace("I'll", "I\\'ll")
+        r = self._patch(server_url, self.KEY, op="append_block", block=block_json_text)
+        assert r["status"] == "ok"
+        assert self._content(server_url)[-1] == {"para": ["I'll do this"]}
+
     # --- if_rev concurrency ---
 
     def test_if_rev_correct_succeeds(self, server_url):
@@ -589,6 +633,20 @@ class TestBatch(_MCP):
         r = self._batch(server_url, self.KEY, json.dumps(ops))
         assert r["status"] == "ok"
         assert self._get(server_url, self.KEY)["title"] == "String-ops"
+
+    def test_batch_ops_as_json_string_with_escaped_apostrophe_is_repaired(self, server_url):
+        """The reported bug: a client escaping apostrophes as \\' when building
+        the 'ops' JSON string must still succeed rather than failing batch."""
+        ops = [{"op": "append_block", "block": {"para": ["I'll do this"]}}]
+        ops_json_text = json.dumps(ops).replace("I'll", "I\\'ll")
+        r = self._batch(server_url, self.KEY, ops_json_text)
+        assert r["status"] == "ok"
+        doc = self._get(server_url, self.KEY)
+        assert doc["content"][-1] == {"para": ["I'll do this"]}
+
+    def test_batch_ops_as_json_string_genuinely_invalid_still_errors(self, server_url):
+        r = self._batch(server_url, self.KEY, "{not valid json")
+        assert "error" in r
 
     def test_batch_invalid_op_rolls_back_all_changes(self, server_url):
         """A failing op must leave the document unchanged (deep-copy safety)."""

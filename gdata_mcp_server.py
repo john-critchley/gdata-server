@@ -11,6 +11,12 @@ Transport flags (env vars, default both enabled):
   MCP_STREAMABLE=true|false   enable Streamable HTTP (POST /mcp/)
 
 All db access is serialised via a single asyncio.Lock.
+
+Notes (public store):
+  gdata-server           — system overview and sub-page index
+  gdata-server/mcp-server — MCP tools reference, OAuth setup, usage
+  gdata-server/server    — HTTP/REST API reference
+  mcp-conventions        — principle: include notes key in every tool description
 """
 
 import argparse
@@ -1281,8 +1287,9 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
             ),
         ]
         _prefix = f"[{store_name} store] "
+        _suffix = " Usage notes: gdata-server/mcp-server (public notes store)"
         for _t in tools:
-            _t.description = _prefix + _t.description
+            _t.description = _prefix + _t.description + _suffix
         return tools
 
     @server.call_tool()

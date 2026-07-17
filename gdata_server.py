@@ -40,6 +40,31 @@ def _increment_rev(rev: str) -> str:
     return f'r{int(rev[1:]) + 1}'
 
 
+def _parse_json_robust(text: str):
+    """Parse a client-supplied JSON string, tolerating one common mistake:
+    escaping apostrophes as \\' inside string values (e.g. "I\\'ll"). \\' is
+    never valid JSON -- the only recognised escapes are \\" \\\\ \\/ \\b \\f
+    \\n \\r \\t and \\uXXXX -- so any occurrence can be safely unescaped to a
+    literal apostrophe and re-parsed.
+
+    Mirrors gdata_mcp_server.py's _parse_json_robust -- keep in sync.
+    """
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as first_error:
+        if "\\'" not in text:
+            raise
+        unescaped = text.replace("\\'", "'")
+        try:
+            return json.loads(unescaped)
+        except json.JSONDecodeError as second_error:
+            raise json.JSONDecodeError(
+                f"invalid JSON, and apostrophe-unescape repair did not fix it "
+                f"(original error: {first_error}; after unescaping \\': {second_error})",
+                second_error.doc, second_error.pos
+            ) from first_error
+
+
 def _get_sidecar(db, key: str) -> dict | None:
     sk = _sidecar_key(key)
     if sk not in db:
@@ -757,14 +782,30 @@ def handle_PUT_request(path: str, body_text: str, if_match: str | None = None) -
                     detail=f"revision mismatch: expected {if_match!r}, current rev is {current_rev!r}"
                 )
 
-        db[key] = body_text
-
         try:
             doc = json.loads(body_text)
-            content = doc.get('content', []) if isinstance(doc, dict) else []
-            if not isinstance(content, list):
-                content = []
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            raise fastapi.HTTPException(status_code=400, detail=f"invalid JSON: {e}")
+
+        # Storing arbitrary JSON (lists, strings, numbers) is intentionally
+        # supported -- this is a general KV store, not JSONHTL-only. But a
+        # list shaped like an ops/patch payload (e.g. from `notes load` given
+        # an ops file by mistake) would silently and permanently break this
+        # key for future patch calls, so reject that specific shape.
+        if isinstance(doc, list) and doc and isinstance(doc[0], dict) and 'op' in doc[0]:
+            raise fastapi.HTTPException(
+                status_code=400,
+                detail=(
+                    "value looks like an ops/patch payload (a list of objects with an 'op' key), "
+                    "not a document -- storing it as-is would permanently break patch on this key. "
+                    "Use patch/batch to apply ops, or store a plain document/value instead."
+                ),
+            )
+
+        db[key] = body_text
+
+        content = doc.get('content', []) if isinstance(doc, dict) else []
+        if not isinstance(content, list):
             content = []
 
         new_sidecar = {
@@ -867,9 +908,9 @@ def handle_PATCH_DOC_request(path: str, body: dict, if_match: str | None = None)
             ops = body.get('ops')
             if isinstance(ops, str):
                 try:
-                    ops = json.loads(ops)
-                except json.JSONDecodeError:
-                    raise fastapi.HTTPException(status_code=400, detail="'ops' could not be parsed as JSON")
+                    ops = _parse_json_robust(ops)
+                except json.JSONDecodeError as e:
+                    raise fastapi.HTTPException(status_code=400, detail=f"'ops' could not be parsed as JSON: {e}")
             if not isinstance(ops, list) or not ops:
                 raise fastapi.HTTPException(status_code=400, detail="'ops' must be a non-empty list")
 
