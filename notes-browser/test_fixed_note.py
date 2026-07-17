@@ -108,6 +108,23 @@ def test_exec_cell_stdout_becomes_text_codeblock(frame):
 
 
 def test_show_image_item_becomes_image_block(frame):
+    """The realistic case: show(fig) -> ImageOutput.__show__() in
+    sheet_kernel.py produces {"kind": "image", ...}, not a JSONML node."""
+    content = [{"codeblock": {"lang": "python", "exec": True, "name": "plot", "body": "pass"}}]
+    panel, _ = _make_panel(frame, content)
+    panel.kernel.run_cell("plot", "pass")
+    show_items = [{"kind": "image", "format": "png", "data": TINY_PNG_B64}]
+    panel.cell_panels["plot"].set_output("", ok=True, show_items=show_items)
+
+    doc = panel._build_fixed_document()
+    image_blocks = [b for b in doc["content"] if "image" in b]
+    assert len(image_blocks) == 1
+    assert image_blocks[0]["image"] == {"format": "png", "data": TINY_PNG_B64}
+
+
+def test_show_image_jsonml_node_also_converts(frame):
+    """Not currently produced by anything, but a valid documented shape
+    (see JSONHTL_SPEC) — still worth converting correctly if ever seen."""
     content = [{"codeblock": {"lang": "python", "exec": True, "name": "plot", "body": "pass"}}]
     panel, _ = _make_panel(frame, content)
     panel.kernel.run_cell("plot", "pass")

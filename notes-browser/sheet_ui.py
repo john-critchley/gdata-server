@@ -985,7 +985,19 @@ class RunnableSheetPanel(wx.Panel):
         """
         if isinstance(item, str):
             return {'para': [item]}
+        if isinstance(item, dict) and item.get('kind') == 'image':
+            # What show(fig) actually produces (ImageOutput.__show__() in
+            # sheet_kernel.py) — the live case, e.g. a speed plot.
+            fmt = item.get('format', 'png') or 'png'
+            data = item.get('data', '')
+            if not data:
+                return None
+            return {'image': {'format': fmt, 'data': data}}
         if isinstance(item, list) and item and item[0] == 'img':
+            # A data: URI JSONML img node — not currently produced by
+            # anything in this codebase (show(fig) uses the dict kind
+            # above), but the shape is a valid, documented alternative
+            # (see JSONHTL_SPEC), so still worth converting if seen.
             attrs = item[1] if len(item) > 1 and isinstance(item[1], dict) else {}
             src = attrs.get('src', '')
             if not src.startswith('data:image/'):
