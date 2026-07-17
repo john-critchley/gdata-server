@@ -38,6 +38,7 @@ except Exception:
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import gdata
 import notes_client
+import svg_render
 
 
 def _load_settings_file(config_path=None):
@@ -332,13 +333,15 @@ class NotesHTMLRenderer:
                     html.append(self._render_list(block['list']))
                 elif 'table' in block:
                     html.append(self._render_table(block['table']))
+                elif 'svg' in block:
+                    html.append(svg_render.svg_block_to_html(block['svg'], self._escape))
                 else:
                     # Unknown block types are ignored to match notes.wsgi behavior.
                     continue
             elif isinstance(block, str):
                 html.append(f'<p>{self._escape(block)}</p>')
         return '\n'.join(html)
-    
+
     def _render_heading(self, heading, block_index=None):
         """Render a JSONHTL heading block."""
         if isinstance(heading, dict):
@@ -1384,6 +1387,12 @@ class NotesBrowser(wx.Frame):
                 cells = row if isinstance(row, list) else [row]
                 rows.append(' | '.join(str(c) for c in cells))
             return '\n'.join(rows)
+
+        if 'svg' in block:
+            sv = block['svg']
+            if not isinstance(sv, dict):
+                return ''
+            return str(sv.get('alt') or sv.get('caption') or '')
 
         return ''
 

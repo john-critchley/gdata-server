@@ -7,6 +7,7 @@ Routes added to the REST app:
   POST /writeback/       → handle writable_note form submissions
 """
 
+import base64
 import html as _html
 import json
 import os
@@ -137,7 +138,15 @@ def _render_inline(item) -> str:
 def _render_inlines(items) -> str:
     if isinstance(items, str):
         items = [items]
-    return ''.join(_render_inline(i) for i in items)
+    joined = ''.join(_render_inline(i) for i in items)
+    # A **bold**/*italic* span can be split across separate string items by an
+    # intervening link/code element (e.g. "**foo " + {code} + " bar.**"). Each
+    # item is converted independently above, so any markers that didn't find
+    # their pair inside their own item are left as literal text here. Do a
+    # second pass over the joined string to catch those spanning cases.
+    joined = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', joined, flags=re.DOTALL)
+    joined = re.sub(r'\*(.+?)\*', r'<em>\1</em>', joined, flags=re.DOTALL)
+    return joined
 
 
 def _render_list_item(item) -> str:
@@ -156,6 +165,28 @@ def _render_list_item(item) -> str:
         )
         return f'<li>{pairs}</li>'
     return ''
+
+
+def _render_svg(sv) -> str:
+    """Render an svg block as a data-URI <img>, never inline <svg> markup.
+
+    Inline SVG can carry <script>, on*= handlers, or <foreignObject> — and
+    this page is public. Browsers treat img-loaded SVG as a static,
+    non-scriptable image regardless of what the markup contains, so this
+    sidesteps sanitization entirely rather than trying to allowlist it.
+    """
+    if not isinstance(sv, dict):
+        return ''
+    body = sv.get('body', '')
+    if not isinstance(body, str) or not body.strip():
+        return ''
+    b64 = base64.b64encode(body.encode('utf-8')).decode('ascii')
+    alt = _html.escape(sv.get('alt', '') or '')
+    img = f'<img src="data:image/svg+xml;base64,{b64}" alt="{alt}" style="max-width:100%;height:auto;">'
+    caption = sv.get('caption')
+    if caption:
+        return f'<figure>{img}<figcaption>{_html.escape(str(caption))}</figcaption></figure>'
+    return f'<figure>{img}</figure>'
 
 
 def _render_block(block) -> str:
@@ -201,6 +232,9 @@ def _render_block(block) -> str:
         # Each item can contain text strings and/or link dicts
         items_html = ''.join(_render_list_item(i) for i in block.get('bullet_list', []))
         return f'<ul>{items_html}</ul>'
+
+    if 'svg' in block:
+        return _render_svg(block['svg'])
 
     if 'writable_note' in block:
         return _render_writable_note(block['writable_note'])

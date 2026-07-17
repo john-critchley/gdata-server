@@ -10,6 +10,7 @@ Classes:
 import datetime
 import base64
 import io
+import itertools
 import json
 import os
 import re
@@ -23,6 +24,65 @@ from urllib.parse import unquote
 from sheet_kernel import SheetKernel, detect_inputs
 
 ANSI_RE = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
+
+# ---------------------------------------------------------------------------
+# Inline image rendering (show(fig) -> ["img", {"src": "data:..."}])
+#
+# wx.html.HtmlWindow's data: URI support is unreliable once the payload gets
+# past a few KB (confirmed empirically: a solid-colour 1400x650 PNG — a
+# realistic matplotlib figure size — renders as a broken-image icon via
+# data:, but renders correctly via wx.MemoryFSHandler). The kernel
+# (sheet_kernel.py) stays UI-agnostic and always emits a data: URI so it's
+# testable without wx/a display; this module re-homes that payload into
+# wx's in-memory filesystem right before rendering.
+# ---------------------------------------------------------------------------
+
+_memory_fs_ready = False
+_memory_fs_counter = itertools.count()
+
+
+def _ensure_memory_fs():
+    global _memory_fs_ready
+    if not _memory_fs_ready:
+        wx.FileSystem.AddHandler(wx.MemoryFSHandler())
+        _memory_fs_ready = True
+
+
+def _register_data_uri_image(data_uri: str) -> str:
+    """Decode a data:image/...;base64,... URI, register it with
+    wx.MemoryFSHandler, and return the memory: filename (caller must
+    RemoveFile it later to avoid leaking memory).
+    """
+    header, _, payload = data_uri.partition(",")
+    raw = base64.b64decode(payload)
+    _ensure_memory_fs()
+    name = f"show_img_{next(_memory_fs_counter)}.png"
+    wx_image = wx.Image(io.BytesIO(raw), wx.BITMAP_TYPE_PNG)
+    wx.MemoryFSHandler.AddFile(name, wx_image, wx.BITMAP_TYPE_PNG)
+    return name
+
+
+def _rehome_data_uri_images(node, registered: list):
+    """Recursively rewrite ["img", {"src": "data:image/...;base64,..."}]
+    nodes in a JSONML tree to memory: URIs, appending each registered
+    filename to `registered` so the caller can clean it up later.
+    """
+    if not isinstance(node, list) or not node:
+        return node
+    tag = node[0] if isinstance(node[0], str) else None
+    if tag == "img" and len(node) > 1 and isinstance(node[1], dict):
+        src = node[1].get("src", "")
+        if src.startswith("data:image/"):
+            name = _register_data_uri_image(src)
+            registered.append(name)
+            new_attrs = dict(node[1])
+            new_attrs["src"] = f"memory:{name}"
+            return [node[0], new_attrs] + list(node[2:])
+        return node
+    return [
+        _rehome_data_uri_images(child, registered) if isinstance(child, list) else child
+        for child in node
+    ]
 
 
 def _clean_output(text):
@@ -268,6 +328,7 @@ class SheetCellPanel(wx.Panel):
         self.input_ctrls = []
         self._last_show_items = []
         self._last_output = ''
+        self._memory_fs_names = []
         self.SetBackgroundColour(wx.Colour(248, 249, 252))
 
         mono = wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
@@ -385,6 +446,7 @@ class SheetCellPanel(wx.Panel):
                         scroller.FitInside()
             wx.CallAfter(_fit_html)
         elif isinstance(item, list):
+            item = _rehome_data_uri_images(item, self._memory_fs_names)
             html_str = jsonml_to_html(item)
             htmlwin = wx.html.HtmlWindow(self.output_host, style=wx.BORDER_SIMPLE)
             htmlwin.SetMinSize((-1, 200))
@@ -482,6 +544,9 @@ class SheetCellPanel(wx.Panel):
             child.Destroy()
         sizer.Clear()
         self.stdout_ctrl = None
+        for name in self._memory_fs_names:
+            wx.MemoryFSHandler.RemoveFile(name)
+        self._memory_fs_names = []
         if reset_state:
             self._last_output = ''
             self._last_show_items = []
