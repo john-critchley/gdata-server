@@ -1090,7 +1090,12 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
     with independent session state — they must not be shared.
     Both instances operate on the same database via the shared db_* functions.
     """
-    server = Server("gdata")
+    bootstrap = (
+        f"{store_name.capitalize()} notes store. "
+        "Begin by calling get with key 'README'; that note is the canonical entry point "
+        "for the complete documentation, conventions, and linked operating guides."
+    )
+    server = Server("gdata", instructions=bootstrap)
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
@@ -1098,10 +1103,8 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
             types.Tool(
                 name="get",
                 description=(
-                    "Read a complete document. Call with just the key to get the full JSONHTL document. "
-                    "Examples: get(key='README') to read the README, get(key='notes/example') to read a note. "
-                    "Optional: set include_block_ids=true if you need revision metadata and stable block IDs for batch editing — "
-                    "this returns {document, rev, block_ids} instead of just the document."
+                    "Read a document by key. Start every new connection with get(key='README') "
+                    "for the full documentation. Set include_block_ids=true before editing."
                 ),
                 inputSchema={
                     "type": "object",
@@ -1117,11 +1120,7 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
             ),
             types.Tool(
                 name="put",
-                description=(
-                    "Store a full document under a key. Regenerates all block IDs and returns the new revision and block_ids. "
-                    "Use this before patch() or batch() operations — no need for a follow-up get(include_block_ids=true). "
-                    "Use patch() or batch() for targeted edits to individual blocks without full document replacement."
-                ),
+                description="Replace a complete document. See README/mcp-tools before editing.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -1137,11 +1136,7 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
             ),
             types.Tool(
                 name="outline",
-                description=(
-                    "Return a compact block outline for a JSONHTL note: {rev, blocks:[{id,index,type,preview}, ...]}. "
-                    "Use this to choose a block_id without reading or aligning the full document sidecar. "
-                    "The preview is plain text extracted from the block and truncated to preview_chars characters."
-                ),
+                description="Return block IDs, indexes, types, previews, and revision for a note.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -1170,14 +1165,7 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
             ),
             types.Tool(
                 name="patch",
-                description=(
-                    "Apply a single block-level patch to a JSONHTL note. "
-                    "For multi-step edits, use get(include_block_ids=True) then batch() instead — "
-                    "index-based ops drift after each mutation. "
-                    "ID-based ops (supply block_id) are preferred: insert_before, insert_after, "
-                    "replace_block+block_id, delete_block+block_id. "
-                    "Index-based ops are fine for simple one-shot changes."
-                ),
+                description="Apply one block or metadata change. Prefer block IDs; see README/mcp-tools.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -1220,13 +1208,7 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
             ),
             types.Tool(
                 name="batch",
-                description=(
-                    "Apply multiple patch operations atomically — all succeed or none are applied. "
-                    "Preferred for multi-step edits. "
-                    "Workflow: (1) get(key, include_block_ids=True) to obtain block IDs and rev; "
-                    "(2) batch(key, ops=[...], if_rev=rev) using block_id in each op to avoid index drift. "
-                    "Returns 409 if if_rev doesn't match (concurrent modification) — re-read and retry."
-                ),
+                description="Apply multiple block changes atomically. Use block IDs and if_rev.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -1248,13 +1230,7 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
             ),
             types.Tool(
                 name="reorder",
-                description=(
-                    "Reorder blocks in a document by providing the complete list of block IDs in the desired sequence. "
-                    "Workflow: get(key, include_block_ids=True) → permute the block_ids array → reorder(key, order=permuted_ids, if_rev=rev). "
-                    "Validation: order must list every current block ID exactly once — missing, unknown, or duplicate IDs are rejected with details. "
-                    "A stale if_rev causes a 409 (another writer may have inserted/deleted blocks since your get). "
-                    "Only block sequence changes; no content or metadata is modified."
-                ),
+                description="Reorder blocks using every current block ID exactly once, with if_rev.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -1274,16 +1250,7 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
             ),
             types.Tool(
                 name="table_op",
-                description=(
-                    "Apply a table editing operation to a table block within a JSONHTL note. "
-                    "Block is addressed by block_id string or integer index ('block' param). "
-                    "Column by name (string) or integer index ('column' param). "
-                    "Row by integer index ('row' param). "
-                    "Composable inside batch(). "
-                    "ops: rename_column, insert_column, delete_column, move_column, reorder_columns, fill_column, set_columns, "
-                    "insert_row, append_row, delete_row, move_row, sort, fill_row, deduplicate, "
-                    "set_cell, set_caption, transpose, set_index, clear_index, replace."
-                ),
+                description="Edit a JSONHTL table block. Operation details are in README/mcp-tools.",
                 inputSchema={
                     "type": "object",
                     "properties": {

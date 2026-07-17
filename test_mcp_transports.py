@@ -141,6 +141,8 @@ class TestSSETransport:
                 async with ClientSession(*streams) as session:
                     result = await session.initialize()
                     assert result.serverInfo.name == "gdata"
+                    assert "get" in (result.instructions or "")
+                    assert "README" in (result.instructions or "")
 
         run_async(go())
 
@@ -158,6 +160,7 @@ class TestSSETransport:
                     names = {t.name for t in result.tools}
                     expected = {"get", "put", "delete", "keys", "patch", "batch"}
                     assert expected <= names, f"Missing tools: {expected - names}"
+                    assert sum(len(t.description or "") for t in result.tools) < 1500
                     extra = names - expected
                     if extra:
                         import warnings
