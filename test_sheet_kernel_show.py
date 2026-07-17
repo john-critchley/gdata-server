@@ -8,6 +8,7 @@ items directly, independent of the wx UI layer.
 Run: python -m pytest test_sheet_kernel_show.py -v
 """
 import base64
+import datetime
 import os
 import sys
 
@@ -120,3 +121,35 @@ show(pd.DataFrame({'a': [1, 2]}))
     assert len(show_items) == 1
     node = show_items[0]
     assert node[0] == "table"
+
+
+# --- last_run_at tracking (for the "Fix as new note" default name) ---
+
+def test_last_run_at_is_none_before_first_run(kernel):
+    assert kernel.list_cells() == []
+
+
+def test_last_run_at_set_after_run(kernel):
+    before = datetime.datetime.now()
+    kernel.run_cell("a", "x = 1")
+    after = datetime.datetime.now()
+    info = kernel.list_cells()[0]
+    assert info.last_run_at is not None
+    assert before <= info.last_run_at <= after
+
+
+def test_last_run_at_updates_on_rerun(kernel):
+    kernel.run_cell("a", "x = 1")
+    first = kernel.list_cells()[0].last_run_at
+    kernel.run_cell("a", "x = 2")
+    second = kernel.list_cells()[0].last_run_at
+    assert second >= first
+
+
+def test_last_run_at_is_set_even_on_error(kernel):
+    """A failed cell still "ran" at a specific time — still useful for
+    naming a fixed note even if that particular cell errored."""
+    _, _, ok, _ = kernel.run_cell("a", "1 / 0")
+    assert not ok
+    info = kernel.list_cells()[0]
+    assert info.last_run_at is not None

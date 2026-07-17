@@ -338,6 +338,10 @@ class NotesHTMLRenderer:
                     html.append(self._render_table(block['table']))
                 elif 'svg' in block:
                     html.append(svg_render.svg_block_to_html(block['svg'], self._escape))
+                elif 'image' in block:
+                    html.append(svg_render.image_block_to_html(block['image'], self._escape))
+                elif 'details' in block:
+                    html.append(self._render_details(block['details']))
                 else:
                     # Unknown block types are ignored to match notes.wsgi behavior.
                     continue
@@ -495,6 +499,29 @@ class NotesHTMLRenderer:
                 rows.append(f'<li>{self._escape(str(item))}</li>')
         rows.append(f'</{tag}>')
         return '\n'.join(rows)
+
+    def _render_details(self, details_dict):
+        """Render a details block.
+
+        Known gap: wx.html.HtmlWindow has no <details>/<summary> support
+        at all (confirmed empirically — it just dumps the "hidden" content
+        as permanently visible text with no collapse behaviour). A real
+        fix needs a native wx.CollapsiblePane, which needs this renderer's
+        one-HTML-blob-per-page architecture to become a sizer of mixed
+        widgets — out of scope here, logged in notes-browser/todo. Degrades
+        to always-expanded, in a bordered box so it's still visually
+        distinguished from surrounding content.
+        """
+        if not isinstance(details_dict, dict):
+            return ''
+        summary = self._escape(str(details_dict.get('summary', '') or ''))
+        nested = self._render_jsonhtl_blocks(details_dict.get('content', []) or [])
+        return (
+            '<table width="100%" style="border: 1px solid #ccc; margin: 8px 0;" cellpadding="0" cellspacing="0">'
+            f'<tr><td bgcolor="#eeeeee" style="padding: 6px 10px;"><b>{summary}</b></td></tr>'
+            f'<tr><td style="padding: 6px 10px;">{nested}</td></tr>'
+            '</table>'
+        )
 
     def _render_table(self, table):
         """Render a JSONHTL table block as an HTML table."""
@@ -1284,6 +1311,19 @@ class NotesBrowser(wx.Frame):
                 return ''
             return str(sv.get('alt') or sv.get('caption') or '')
 
+        if 'image' in block:
+            im = block['image']
+            if not isinstance(im, dict):
+                return ''
+            return str(im.get('alt') or im.get('caption') or '')
+
+        if 'details' in block:
+            d = block['details']
+            if not isinstance(d, dict):
+                return ''
+            nested = '\n'.join(self._block_text(b) for b in d.get('content', []) or [])
+            return '\n'.join(filter(None, [str(d.get('summary') or ''), nested]))
+
         return ''
 
     def _inline_text(self, items):
@@ -1705,6 +1745,7 @@ class NotesBrowser(wx.Frame):
                     'sheet.cell.scroll_into_view',
                     'sheet.run_all',
                     'sheet.save_page',
+                    'sheet.fix_as_new_note',
                     'sheet.save_data',
                     'sheet.load_data',
                     'sheet.clear_outputs',
@@ -2092,6 +2133,15 @@ class NotesBrowser(wx.Frame):
             if sp.is_running:
                 raise ValueError('Sheet is busy (SHEET_BUSY)')
             return sp.save_page()
+
+        if method == 'sheet.fix_as_new_note':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            new_key = params.get('key')
+            if new_key is not None and not isinstance(new_key, str):
+                raise ValueError("'key' must be a string if given")
+            return sp.fix_as_new_note(new_key)
 
         if method == 'sheet.save_data':
             sp = _require_sheet()

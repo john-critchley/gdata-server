@@ -163,3 +163,89 @@ def test_text_elements_are_rasterized(app):
             if not (r > 200 and g > 200 and b < 100):
                 non_yellow += 1
     assert non_yellow > 0, "expected some non-background pixels from rendered text glyphs"
+
+
+# --- image block (raster, e.g. fixed-note matplotlib output) ---
+
+RED_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR4nGP8z4AATAxEcQAz0QEHOoQ+uAAAAABJRU5ErkJggg=="
+
+
+def test_image_block_to_html_returns_memory_img_tag(app):
+    html = svg_render.image_block_to_html({"data": RED_PNG_B64}, escape=lambda s: s)
+    assert html.startswith('<img src="memory:img_')
+    assert '.png" alt="' in html
+
+
+def test_image_block_no_rasterization_needed(app):
+    """Unlike svg, image bytes are already raster — this should not touch
+    cairosvg at all, just decode base64 straight into a wx.Image."""
+    import unittest.mock as mock
+
+    with mock.patch("svg_render.cairosvg") as mock_cairosvg:
+        html = svg_render.image_block_to_html({"data": RED_PNG_B64}, escape=lambda s: s)
+        assert html != ""
+        mock_cairosvg.svg2png.assert_not_called()
+
+
+def test_image_and_svg_use_different_name_prefixes(app):
+    """img_ vs svg_ prefixes so the two registries can't collide even if
+    (implausibly) their content hashes matched."""
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="red"/></svg>'
+    svg_html = svg_render.svg_block_to_html({"body": svg}, escape=lambda s: s)
+    img_html = svg_render.image_block_to_html({"data": RED_PNG_B64}, escape=lambda s: s)
+    assert 'src="memory:svg_' in svg_html
+    assert 'src="memory:img_' in img_html
+
+
+def test_image_malformed_base64_returns_empty_string(app):
+    html = svg_render.image_block_to_html({"data": "not valid base64!!!"}, escape=lambda s: s)
+    assert html == ""
+
+
+def test_image_missing_data_returns_empty_string(app):
+    assert svg_render.image_block_to_html({}, escape=lambda s: s) == ""
+    assert svg_render.image_block_to_html({"data": ""}, escape=lambda s: s) == ""
+    assert svg_render.image_block_to_html("not a dict", escape=lambda s: s) == ""
+
+
+def test_image_caption_included(app):
+    html = svg_render.image_block_to_html(
+        {"data": RED_PNG_B64, "caption": "A tiny red square"}, escape=lambda s: s
+    )
+    assert "A tiny red square" in html
+
+
+def test_image_renders_real_pixels(app):
+    import wx.html
+
+    html_fragment = svg_render.image_block_to_html({"data": RED_PNG_B64}, escape=lambda s: s)
+
+    frame = wx.Frame(None, size=(100, 100))
+    htmlwin = wx.html.HtmlWindow(frame, size=(80, 80))
+    htmlwin.SetPage(f"<html><body>{html_fragment}</body></html>")
+    frame.Show()
+
+    result = {}
+
+    def check():
+        bmp = wx.Bitmap(80, 80)
+        context = wx.ClientDC(htmlwin)
+        memdc = wx.MemoryDC()
+        memdc.SelectObject(bmp)
+        memdc.Blit(0, 0, 80, 80, context, 0, 0)
+        memdc.SelectObject(wx.NullBitmap)
+        img = bmp.ConvertToImage()
+        red = sum(
+            1
+            for x in range(0, 20)
+            for y in range(0, 20)
+            if img.GetRed(x, y) > 180 and img.GetGreen(x, y) < 100
+        )
+        result["red"] = red
+        app.ExitMainLoop()
+
+    wx.CallLater(400, check)
+    app.MainLoop()
+    frame.Destroy()
+
+    assert result["red"] > 0, "expected red pixels from the decoded PNG, found none"

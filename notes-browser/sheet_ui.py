@@ -577,14 +577,15 @@ class RunnableSheetPanel(wx.Panel):
         tbs = wx.BoxSizer(wx.HORIZONTAL)
         self.run_all_btn  = wx.Button(tb, label='Run All')
         self.save_btn     = wx.Button(tb, label='Save')
+        self.fix_btn      = wx.Button(tb, label='Fix as New Note…')
         self.clear_btn    = wx.Button(tb, label='Clear Outputs')
         self.restart_btn  = wx.Button(tb, label='Restart Kernel')
         self.export_btn   = wx.Button(tb, label='Save Data…')
         self.import_btn   = wx.Button(tb, label='Load Data…')
         self.status_label = wx.StaticText(tb, label='')
         self.status_label.SetForegroundColour(wx.Colour(65, 65, 65))
-        for btn in (self.run_all_btn, self.save_btn, self.clear_btn, self.restart_btn,
-                    self.export_btn, self.import_btn):
+        for btn in (self.run_all_btn, self.save_btn, self.fix_btn, self.clear_btn,
+                    self.restart_btn, self.export_btn, self.import_btn):
             tbs.Add(btn, 0, wx.ALL, 4)
         tbs.AddStretchSpacer(1)
         tbs.Add(self.status_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 4)
@@ -593,6 +594,7 @@ class RunnableSheetPanel(wx.Panel):
 
         self.run_all_btn.Bind(wx.EVT_BUTTON,  lambda e: self._on_run_all())
         self.save_btn.Bind(wx.EVT_BUTTON,     lambda e: self._on_save_page())
+        self.fix_btn.Bind(wx.EVT_BUTTON,      lambda e: self._on_fix_as_new_note())
         self.clear_btn.Bind(wx.EVT_BUTTON,    lambda e: self._on_clear_outputs())
         self.restart_btn.Bind(wx.EVT_BUTTON,  lambda e: self._on_restart_kernel())
         self.export_btn.Bind(wx.EVT_BUTTON,   lambda e: self._on_export())
@@ -936,6 +938,168 @@ class RunnableSheetPanel(wx.Panel):
         if self.is_running:
             return
         self.save_page()
+
+    # --- Fix as New Note -----------------------------------------------
+    # "Fixing" a runnable note: save the *current* outputs (a matplotlib
+    # plot, a table, printed text) as a new, ordinary non-runnable note,
+    # so it can be read back later without ever re-running the code (which
+    # may pull live/time-sensitive data — the whole point is a snapshot).
+    # See notes-browser/fixed-notes and JSONHTL_SPEC ("image", "details").
+
+    def _suggest_fixed_name(self):
+        """Default new-note name: original key + when the data was last
+        actually pulled (last_run_at), not when Fix is clicked — those can
+        be hours apart (e.g. fixing this morning's commute plot tonight).
+        """
+        infos = self.kernel.list_cells()
+        times = [i.last_run_at for i in infos if i.last_run_at]
+        when = max(times) if times else datetime.datetime.now()
+        return f"{self.key}-{when.strftime('%Y-%m-%d-%H%M')}"
+
+    def _show_item_to_block(self, item):
+        """Convert one show()-produced item into a persistent JSONHTL
+        block, or None if there's no static representation for it yet.
+        """
+        if isinstance(item, str):
+            return {'para': [item]}
+        if isinstance(item, list) and item and item[0] == 'img':
+            attrs = item[1] if len(item) > 1 and isinstance(item[1], dict) else {}
+            src = attrs.get('src', '')
+            if not src.startswith('data:image/'):
+                return None
+            header, _, payload = src.partition(',')
+            fmt = 'png'
+            if '/' in header:
+                fmt = header.split('/', 1)[1].split(';', 1)[0] or 'png'
+            return {'image': {'format': fmt, 'data': payload}}
+        if isinstance(item, list) and item and item[0] == 'table':
+            return self._jsonml_table_to_block(item)
+        # dict kinds ('plot', 'html') and anything else: no persistent
+        # block type for these yet — see notes-browser/todo.
+        return None
+
+    def _jsonml_table_to_block(self, node):
+        """Best-effort conversion of the ndarray/DataFrame JSONML table
+        shape (_make_jsonml_for_ndarray/_make_jsonml_for_dataframe in
+        sheet_kernel.py) into a {"table": {...}} block. Handles a leading
+        header row of <th> cells if present (the DataFrame case); a plain
+        grid of <td> rows otherwise (the ndarray case). Drops any
+        <caption> child — no equivalent field on the table block type.
+        """
+        rows_ml = [c for c in node[2:] if isinstance(c, list) and c and c[0] == 'tr']
+        if not rows_ml:
+            return None
+
+        def cell_text(cell):
+            return str(cell[2]) if len(cell) > 2 else ''
+
+        first_cells = [c for c in rows_ml[0][2:] if isinstance(c, list)]
+        is_header = bool(first_cells) and all(c and c[0] == 'th' for c in first_cells)
+        columns = [cell_text(c) for c in first_cells] if is_header else []
+        data_rows_ml = rows_ml[1:] if is_header else rows_ml
+        rows = []
+        for r in data_rows_ml:
+            cells = [c for c in r[2:] if isinstance(c, list)]
+            rows.append([cell_text(c) for c in cells])
+        return {'table': {'columns': columns, 'rows': rows}}
+
+    def _build_fixed_document(self):
+        """Walk the current document, replacing each executed cell with a
+        collapsed <details> section holding its code, followed by its
+        outputs converted to persistent blocks. Prose blocks pass through
+        unchanged. Result has no "runnable" key at all.
+        """
+        doc = copy.deepcopy(self.data)
+        if not isinstance(doc, dict):
+            doc = {}
+        doc.pop('runnable', None)
+        content = doc.get('content', [])
+        if not isinstance(content, list):
+            content = []
+
+        seen_names = {}
+        for block in content:
+            if isinstance(block, dict) and 'codeblock' in block:
+                cb = block['codeblock']
+                if isinstance(cb, dict) and cb.get('exec') is True:
+                    n = cb.get('name', '')
+                    if n:
+                        seen_names[n] = seen_names.get(n, 0) + 1
+
+        new_content = []
+        cb_idx = 0
+        for block in content:
+            is_exec = (
+                isinstance(block, dict) and 'codeblock' in block
+                and isinstance(block['codeblock'], dict)
+                and block['codeblock'].get('exec') is True
+            )
+            if isinstance(block, dict) and 'codeblock' in block:
+                cb_idx += 1
+
+            if not is_exec:
+                new_content.append(block)
+                continue
+
+            cb = block['codeblock']
+            name = cb.get('name', '')
+            canon = name if (name and seen_names.get(name, 0) == 1) else str(cb_idx - 1)
+            panel = self.cell_panels.get(canon)
+
+            code_block = {'codeblock': {'lang': cb.get('lang', ''), 'body': cb.get('body', '')}}
+            if panel is None:
+                new_content.append(code_block)
+                continue
+
+            new_content.append({
+                'details': {'summary': f'Cell: {name or canon} (code)', 'content': [code_block]},
+            })
+
+            stdout_text = panel.get_stdout_text()
+            if stdout_text:
+                new_content.append({'codeblock': {'lang': 'text', 'body': stdout_text}})
+
+            for item in panel.get_show_items():
+                block_out = self._show_item_to_block(item)
+                if block_out is not None:
+                    new_content.append(block_out)
+
+        doc['content'] = new_content
+        return doc
+
+    def fix_as_new_note(self, new_key=None):
+        """Build and save the fixed document under new_key (default: the
+        suggested name). Shared by the toolbar button and the
+        sheet.fix_as_new_note control-API method.
+        """
+        new_key = (new_key or self._suggest_fixed_name()).strip()
+        if not new_key:
+            raise ValueError("new_key must not be empty")
+        doc = self._build_fixed_document()
+        self.browser.data_source.write(new_key, doc)
+        self.status_label.SetLabel(f'Fixed copy saved as {new_key}')
+        return {'key': new_key}
+
+    def _on_fix_as_new_note(self):
+        if self.is_running:
+            return
+        suggested = self._suggest_fixed_name()
+        dlg = wx.TextEntryDialog(
+            self, 'Save the current outputs as a new, non-runnable note:',
+            'Fix as New Note', suggested,
+        )
+        try:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            new_key = dlg.GetValue().strip()
+        finally:
+            dlg.Destroy()
+        if not new_key:
+            return
+        try:
+            self.fix_as_new_note(new_key)
+        except Exception as e:
+            wx.MessageBox(f'Failed to save fixed copy: {e}', 'Fix as New Note', wx.OK | wx.ICON_ERROR)
 
     def export_data(self, path):
         cells_out = {}

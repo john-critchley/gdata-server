@@ -3,6 +3,7 @@ import base64
 import builtins
 import code
 import contextlib
+import datetime
 import io
 import json
 import math
@@ -33,6 +34,12 @@ class CellRecord:
     run_count: int = 0
     run_time_ms: float = 0.0
     status: CellStatus = CellStatus.NEVER_RUN
+    # Wall-clock time the cell last *finished* running — distinct from
+    # run_time_ms (a duration). Used to suggest a "fixed note" name based
+    # on when the data was actually pulled, not when the note gets saved
+    # (those can be far apart — e.g. a plot from this morning's commute,
+    # fixed as a new note this evening).
+    last_run_at: Optional[datetime.datetime] = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +50,7 @@ class CellInfo:
     status: CellStatus
     has_output: bool
     has_error: bool
+    last_run_at: Optional[datetime.datetime] = None
 
 
 class CappedTextBuffer(io.TextIOBase):
@@ -378,6 +386,7 @@ class SheetKernel:
                 status=record.status,
                 has_output=bool(record.last_output),
                 has_error=bool(record.last_error),
+                last_run_at=record.last_run_at,
             )
             for record in self._cells.values()
         ]
@@ -464,6 +473,7 @@ class SheetKernel:
             record.last_error = stderr_buf.getvalue()
             record.run_time_ms = elapsed * 1000.0
             record.status = CellStatus.OK if ok else CellStatus.ERROR
+            record.last_run_at = datetime.datetime.now()
             self._running = False
         return record.last_output, record.last_error, ok, list(show_collector.items)
 

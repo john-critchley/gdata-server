@@ -57,6 +57,35 @@ th { background: #eee; font-family: sans-serif; }
 .bks th { background: #222; color: #fff; }
 .bks tr:nth-child(even) { background: #f9f9f9; }
 .bks th, .bks td { border: 1px solid #ddd; padding: 8px; }
+figure { margin: 1em 0; }
+figcaption { font-family: sans-serif; font-size: 0.85em; color: #666; margin-top: 0.3em; }
+details {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 0.4em 0.9em;
+    margin: 0.8em 0;
+    background: #fafafa;
+}
+details summary {
+    font-family: sans-serif;
+    font-size: 0.9em;
+    color: #444;
+    cursor: pointer;
+    padding: 0.2em 0;
+}
+details[open] summary { margin-bottom: 0.4em; border-bottom: 1px solid #eee; }
+.expand-all-row { font-family: sans-serif; font-size: 0.85em; }
+.expand-all-row button {
+    font-family: sans-serif;
+    font-size: 0.85em;
+    color: #444;
+    background: #fff;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 0.3em 0.8em;
+    cursor: pointer;
+}
+.expand-all-row button:hover { background: #f0f0f0; }
 .meta {
     font-family: sans-serif;
     font-size: 0.8em;
@@ -189,6 +218,38 @@ def _render_svg(sv) -> str:
     return f'<figure>{img}</figure>'
 
 
+def _render_image(im) -> str:
+    """Render an image block (raster, e.g. a fixed-note matplotlib plot)
+    as a data-URI <img>. Unlike svg.body this has no un-encoded form —
+    raster bytes aren't text — so base64 isn't a choice here, just the
+    only option.
+    """
+    if not isinstance(im, dict):
+        return ''
+    data = im.get('data', '')
+    if not isinstance(data, str) or not data.strip():
+        return ''
+    fmt = _html.escape(im.get('format', 'png') or 'png')
+    alt = _html.escape(im.get('alt', '') or '')
+    img = f'<img src="data:image/{fmt};base64,{_html.escape(data)}" alt="{alt}" style="max-width:100%;height:auto;">'
+    caption = im.get('caption')
+    if caption:
+        return f'<figure>{img}<figcaption>{_html.escape(str(caption))}</figcaption></figure>'
+    return f'<figure>{img}</figure>'
+
+
+def _render_details(d) -> str:
+    """Render a details block as native <details>/<summary> — collapsed by
+    default, expandable per-item with zero JavaScript (browser-native), and
+    see _render_page for the pure-CSS "expand all" control.
+    """
+    if not isinstance(d, dict):
+        return ''
+    summary = _html.escape(str(d.get('summary', '') or ''))
+    nested = _render_content(d.get('content', []))
+    return f'<details><summary>{summary}</summary>{nested}</details>'
+
+
 def _render_block(block) -> str:
     if not isinstance(block, dict):
         return ''
@@ -235,6 +296,12 @@ def _render_block(block) -> str:
 
     if 'svg' in block:
         return _render_svg(block['svg'])
+
+    if 'image' in block:
+        return _render_image(block['image'])
+
+    if 'details' in block:
+        return _render_details(block['details'])
 
     if 'writable_note' in block:
         return _render_writable_note(block['writable_note'])
@@ -361,12 +428,31 @@ def _meta_html(doc: dict) -> str:
 
 def _render_page(key: str, doc: dict) -> str:
     title = _html.escape(doc.get('title', key))
-    body = '\n'.join([
+    content_html = _render_content(doc.get('content', ''), skip_h1='title' in doc)
+    body_parts = [
         _nav_html(key),
         f'<h1>{title}</h1>',
-        _render_content(doc.get('content', ''), skip_h1='title' in doc),
-        _meta_html(doc),
-    ])
+    ]
+    if '<details' in content_html:
+        # Per-item toggle is genuinely zero-JS (native <details>/<summary>).
+        # "Expand all" is not: tried a pure-CSS checkbox + :checked +
+        # general-sibling rule first, but confirmed empirically it doesn't
+        # work — browsers suppress collapsed <details> content via native
+        # rendering suppression tied to the `open` DOM attribute, not an
+        # overridable UA stylesheet `display` rule, so no amount of author
+        # `!important` reaches it. This one control needs the DOM attribute
+        # itself changed, which means a (tiny, inline) script. See
+        # JSONHTL_SPEC "details" for the full story.
+        body_parts.append(
+            '<p class="expand-all-row">'
+            '<button type="button" class="expand-all-btn" onclick="'
+            "document.querySelectorAll('.note-body details').forEach(d => d.open = true)"
+            '">Expand all sections</button>'
+            '</p>'
+        )
+    body_parts.append(f'<div class="note-body">{content_html}</div>')
+    body_parts.append(_meta_html(doc))
+    body = '\n'.join(body_parts)
     return (
         f'<!DOCTYPE html>\n<html lang="en">\n<head>\n'
         f'<meta charset="utf-8">\n'
