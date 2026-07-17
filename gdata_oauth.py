@@ -38,6 +38,9 @@ CLIENT_SECRET = os.environ.get("OAUTH_CLIENT_SECRET", "")
 PASSWORD_HASH  = os.environ.get("OAUTH_PASSWORD",  "")
 PASSWORD_HASH2 = os.environ.get("OAUTH_PASSWORD2", "")
 ISSUER        = os.environ.get("OAUTH_ISSUER",        "https://www.critchley.biz")
+AUTHORIZATION_ENDPOINT = os.environ.get(
+    "OAUTH_AUTHORIZATION_ENDPOINT", f"{ISSUER}/oauth/authorize"
+)
 _issuer_path  = ISSUER.replace("https://", "").replace("http://", "").split("/", 1)
 _STORE_LABEL  = _issuer_path[1].strip("/") if len(_issuer_path) > 1 and _issuer_path[1].strip("/") else "notes"
 TOKEN_FILE    = os.environ.get("OAUTH_TOKEN_FILE",
@@ -295,7 +298,7 @@ async def protected_resource_metadata(path: str = ""):
 async def oauth_metadata():
     return {
         "issuer":                                ISSUER,
-        "authorization_endpoint":                f"{ISSUER}/oauth/authorize",
+        "authorization_endpoint":                AUTHORIZATION_ENDPOINT,
         "token_endpoint":                        f"{ISSUER}/oauth/token",
         "revocation_endpoint":                   f"{ISSUER}/oauth/revoke",
         "response_types_supported":              ["code"],
@@ -367,10 +370,24 @@ async def authorize_get(
 ):
     if not _client_known(client_id):
         raise HTTPException(400, "unknown client_id")
+    if response_type != "code":
+        raise HTTPException(400, "only response_type=code supported")
     if code_challenge_method != "S256":
         raise HTTPException(400, "only S256 code_challenge_method supported")
-    return _render_form(client_id, redirect_uri, state,
-                        code_challenge, code_challenge_method)
+    if not code_challenge:
+        raise HTTPException(400, "code_challenge required")
+
+    # Apache protects this endpoint with the WebDAV Basic Auth credentials.
+    # Once that succeeds, issue the normal short-lived, one-use PKCE code
+    # without asking for a second application password.
+    code = secrets.token_urlsafe(32)
+    _get_store().save_code(code, client_id, redirect_uri,
+                           code_challenge, code_challenge_method)
+    sep = "&" if "?" in redirect_uri else "?"
+    return RedirectResponse(
+        f"{redirect_uri}{sep}code={code}&state={state}",
+        status_code=302,
+    )
 
 
 @router.post("/oauth/authorize", response_class=HTMLResponse)

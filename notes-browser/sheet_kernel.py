@@ -142,6 +142,19 @@ class HtmlOutput:
         return {'kind': 'html', 'content': self._html}
 
 
+class ImageOutput:
+    """Wrap PNG bytes for display in a cell output panel."""
+    def __init__(self, png_bytes: bytes):
+        self._png_bytes = bytes(png_bytes)
+
+    def __show__(self):
+        return {
+            'kind': 'image',
+            'format': 'png',
+            'data': base64.b64encode(self._png_bytes).decode('ascii'),
+        }
+
+
 class _ShowCollector:
     """Accumulates items produced by show() calls during cell execution."""
     def __init__(self):
@@ -300,21 +313,7 @@ def _make_show_func(collector: "_ShowCollector"):
                 return
             collector.append(result)
             return
-        # 2. matplotlib/seaborn Figure — serialise to PNG, embed as a data:
-        # URI <img> JSONML node. wx.html.HtmlWindow (which renders JSONML
-        # list items — see jsonml_to_html/_append_show_item in sheet_ui.py)
-        # supports data: URIs directly, confirmed empirically.
-        try:
-            import matplotlib.figure as _mpl_figure
-            if isinstance(obj, _mpl_figure.Figure):
-                buf = io.BytesIO()
-                obj.savefig(buf, format="png")
-                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-                collector.append(["img", {"src": f"data:image/png;base64,{b64}"}])
-                return
-        except ImportError:
-            pass
-        # 3. numpy ndarray
+        # 2. numpy ndarray
         try:
             import numpy as _np
             if isinstance(obj, _np.ndarray):
@@ -322,11 +321,21 @@ def _make_show_func(collector: "_ShowCollector"):
                 return
         except ImportError:
             pass
-        # 4. pandas DataFrame / Series
+        # 3. pandas DataFrame / Series
         try:
             import pandas as _pd
             if isinstance(obj, (_pd.DataFrame, _pd.Series)):
                 collector.append(_make_jsonml_for_dataframe(obj))
+                return
+        except ImportError:
+            pass
+        # 4. matplotlib Figure
+        try:
+            from matplotlib.figure import Figure as _MplFigure
+            if isinstance(obj, _MplFigure):
+                buf = io.BytesIO()
+                obj.savefig(buf, format='png', bbox_inches='tight', dpi=120)
+                collector.append(ImageOutput(buf.getvalue()).__show__())
                 return
         except ImportError:
             pass
@@ -459,7 +468,8 @@ class SheetKernel:
                      patched_input(input_shim), \
                      patched_builtin("show", show_func), \
                      patched_builtin("plot", plot_func), \
-                     patched_builtin("HtmlOutput", HtmlOutput):
+                     patched_builtin("HtmlOutput", HtmlOutput), \
+                     patched_builtin("ImageOutput", ImageOutput):
                     try:
                         exec(code_obj, self.namespace, self.namespace)
                     except BaseException as exc:
