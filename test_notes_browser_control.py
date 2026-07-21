@@ -81,11 +81,21 @@ def rpc(port: int, method: str, params: dict = None, timeout: float = 5.0) -> di
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def gdata_server():
-    """Start a temporary gdata REST server for the browser to connect to."""
+def gdata_server(tmp_path_factory):
+    """Start a temporary gdata REST server for the browser to connect to.
+
+    Uses its own throwaway gdbm file rather than the deployed one configured in
+    .gdata_server.yaml, so the test never contends with a running notes server
+    for the live database lock.
+    """
     import uvicorn
     import threading
-    from gdata_server import app
+    import gdata_server as gs
+
+    db_path = tmp_path_factory.mktemp("gdata") / "test_notes.gdbm"
+    gs.config['gdbm_file'] = str(db_path)
+    gs.db = None  # drop any handle opened against the deployed path
+    app = gs.app
 
     rest_port = get_free_port()
     config = uvicorn.Config(app, host="127.0.0.1", port=rest_port, log_level="error")

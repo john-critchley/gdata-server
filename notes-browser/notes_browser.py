@@ -283,6 +283,15 @@ INLINE_SPAN_TAGS = {
 }
 
 
+def format_meta_value(value):
+    """Format a metadata value (e.g. tags) for display. List/tuple values are
+    joined as comma-separated text rather than shown as a raw Python repr like
+    ['chess', 'board']. Matches the web renderer's metadata formatting."""
+    if isinstance(value, (list, tuple)):
+        return ', '.join(str(v) for v in value)
+    return str(value)
+
+
 class NotesHTMLRenderer:
     """Convert JSONHTL note data to HTML for display."""
 
@@ -317,7 +326,7 @@ class NotesHTMLRenderer:
             meta_pairs = [(k, v) for k, v in data.items() if k not in ('title', 'content', 'runnable')]
             if meta_pairs:
                 parts = ' &nbsp;·&nbsp; '.join(
-                    f'<b>{self._escape(str(k))}</b> {self._escape(str(v))}'
+                    f'<b>{self._escape(str(k))}</b> {self._escape(format_meta_value(v))}'
                     for k, v in meta_pairs
                 )
                 html.append(
@@ -1652,7 +1661,7 @@ class NotesBrowser(wx.Frame):
         # Store metadata for status line display
         self._page_meta_text = ''
         if isinstance(data, dict):
-            pairs = [(k, str(v)) for k, v in data.items() if k not in ('title', 'content')]
+            pairs = [(k, format_meta_value(v)) for k, v in data.items() if k not in ('title', 'content')]
             if pairs:
                 self._page_meta_text = '  ·  '.join(f'{k}: {v}' for k, v in pairs)
         self._update_selection_indicator()
