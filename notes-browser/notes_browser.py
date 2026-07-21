@@ -225,8 +225,12 @@ class NotesDataSource:
             elif self.db:
                 if key not in self.db:
                     return None
-                json_str = self.db[key]
-                return json.loads(json_str)
+                result = self.db[key]
+                # gdata_local.__getitem__ already returns a parsed dict;
+                # gdata_local_simple returns a string — handle both.
+                if isinstance(result, (str, bytes, bytearray)):
+                    return json.loads(result)
+                return result
             else:
                 return None
         except Exception as e:
@@ -265,6 +269,18 @@ class NotesDataSource:
         """Close the database connection."""
         if self.db:
             self.db.close()
+
+
+# JSONHTL inline span types that wrap plain text, mapped to their HTML tag.
+# Both the HTML renderer and the plain-text extractor dispatch through this,
+# so a new inline type is added in one place.
+INLINE_SPAN_TAGS = {
+    'code':   'code',
+    'bold':   'b',
+    'strong': 'b',
+    'italic': 'i',
+    'em':     'i',
+}
 
 
 class NotesHTMLRenderer:
@@ -374,15 +390,16 @@ class NotesHTMLRenderer:
             elif isinstance(item, dict):
                 if 'link' in item:
                     result.append(self._render_link(item['link']))
-                elif 'code' in item:
-                    result.append(f'<code>{self._escape(item["code"])}</code>')
-                elif 'bold' in item:
-                    result.append(f'<b>{self._escape(item["bold"])}</b>')
                 elif 'href' in item:
                     # Direct link object
                     result.append(self._render_link(item))
                 else:
-                    result.append(self._escape(str(item)))
+                    key = next(iter(item), None)
+                    tag = INLINE_SPAN_TAGS.get(key)
+                    if tag:
+                        result.append(f'<{tag}>{self._escape(item[key])}</{tag}>')
+                    else:
+                        result.append(self._escape(str(item)))
             else:
                 result.append(self._escape(str(item)))
         return ''.join(result)
@@ -539,11 +556,31 @@ class NotesHTMLRenderer:
                     f'<font color="#ffffff"><b>{self._escape(str(col))}</b></font></th>'
                 )
             html.append('</tr>')
-        # Data rows — alternating stripe on even rows (Python-side, no nth-child needed)
+        # Data rows — highlight sprint rows consistently without requiring
+        # presentation metadata in JSONHTL.  Fall back to alternating stripes.
+        sprint_col = None
+        for col_index, col in enumerate(columns):
+            if str(col).strip().lower() in ('sprint', 'sprint / queue'):
+                sprint_col = col_index
+                break
+        sprint_colours = (
+            '#cfe2f3', '#eadcf8', '#fce5cd', '#d0e0e3',
+            '#f4cccc', '#ffe08a', '#b7d7ff', '#d9d2e9',
+        )
         for i, row in enumerate(rows):
-            bg_attr = ' bgcolor="#f9f9f9"' if i % 2 == 1 else ''
-            html.append('<tr>')
+            row_colour = None
             cells = row if isinstance(row, list) else [row]
+            if sprint_col is not None and sprint_col < len(cells):
+                sprint_match = re.search(
+                    r'\bSprint\s+(\d+)\b', str(cells[sprint_col]), re.IGNORECASE
+                )
+                if sprint_match:
+                    sprint_number = int(sprint_match.group(1))
+                    row_colour = sprint_colours[sprint_number % len(sprint_colours)]
+            if row_colour is None and i % 2 == 1:
+                row_colour = '#f9f9f9'
+            bg_attr = f' bgcolor="{row_colour}"' if row_colour else ''
+            html.append('<tr>')
             for cell in cells:
                 html.append(
                     f'<td{bg_attr} style="border: 1px solid #ddd; padding: 8px;">'
@@ -1448,12 +1485,14 @@ class NotesBrowser(wx.Frame):
                         parts.append(str(link.get('text', link.get('href', ''))))
                     else:
                         parts.append(str(link))
-                elif 'code' in item:
-                    parts.append(str(item['code']))
                 elif 'href' in item:
                     parts.append(str(item.get('text', item.get('href', ''))))
                 else:
-                    parts.append(str(item))
+                    key = next(iter(item), None)
+                    if INLINE_SPAN_TAGS.get(key):
+                        parts.append(str(item[key]))
+                    else:
+                        parts.append(str(item))
             else:
                 parts.append(str(item))
         return ''.join(parts)
