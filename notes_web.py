@@ -150,6 +150,18 @@ def _href(target: str) -> str:
     return f'/notes/{target}'
 
 
+# Dict-form inline span types → HTML tag. Mirrors the desktop browser's
+# INLINE_SPAN_TAGS (notes_browser.py) so {"strong": ...}/{"em": ...}/{"italic": ...}
+# render the same in both; web keeps its own <strong>/<em> tag convention.
+_INLINE_SPAN_TAGS = {
+    'code':   'code',
+    'bold':   'strong',
+    'strong': 'strong',
+    'italic': 'em',
+    'em':     'em',
+}
+
+
 def _render_inline(item) -> str:
     if isinstance(item, str):
         return _md_inline(item)
@@ -157,10 +169,10 @@ def _render_inline(item) -> str:
         if 'link' in item:
             lnk = item['link']
             return f'<a href="{_html.escape(_href(lnk["href"]))}">{_html.escape(lnk.get("text", lnk["href"]))}</a>'
-        if 'code' in item:
-            return f'<code>{_html.escape(item["code"])}</code>'
-        if 'bold' in item:
-            return f'<strong>{_html.escape(item["bold"])}</strong>'
+        key = next(iter(item), None)
+        tag = _INLINE_SPAN_TAGS.get(key)
+        if tag:
+            return f'<{tag}>{_html.escape(str(item[key]))}</{tag}>'
     return ''
 
 
