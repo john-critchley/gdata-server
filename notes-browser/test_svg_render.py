@@ -1,6 +1,6 @@
 """
 test_svg_render.py — tests for svg_render.py, the wx-side rasterizer used
-by notes_browser.py and notes_browser_runnable.py to display {"svg": {...}}
+by notes_browser.py to display {"svg": {...}}
 blocks (wx.html.HtmlWindow cannot render SVG at all).
 
 Requires a display (X11/Wayland) since it exercises real wx.svg

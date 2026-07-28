@@ -1,6 +1,6 @@
 """
 svg_render.py — renders {"svg": {...}} and {"image": {...}} JSONHTL blocks
-for the wx desktop browsers (notes_browser.py and notes_browser_runnable.py).
+for the wx desktop browsers (notes_browser.py).
 
 wx.html.HtmlWindow cannot render SVG at all, and (separately, per
 sheet_ui.py) its data: URI support is unreliable past a few KB anyway. So

@@ -21,7 +21,7 @@ pytestmark = pytest.mark.skipif(
 import wx  # noqa: E402
 
 from sheet_ui import RunnableSheetPanel  # noqa: E402
-from notes_browser_runnable import NotesHTMLRenderer  # noqa: E402
+from notes_browser import NotesHTMLRenderer  # noqa: E402
 
 TINY_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR4nGP8z4AATAxEcQAz0QEHOoQ+uAAAAABJRU5ErkJggg=="
 

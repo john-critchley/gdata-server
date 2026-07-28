@@ -1,5 +1,5 @@
 """
-sheet_ui.py — Runnable Sheet UI classes for notes_browser_runnable.py
+sheet_ui.py — Runnable Sheet UI classes for notes_browser.py
 
 Classes:
   ProsePanel         — JSONHTL prose blocks rendered as wx.html.HtmlWindow
