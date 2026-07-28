@@ -15,8 +15,11 @@ import re
 from datetime import datetime, timezone
 
 import httpx
+import yaml
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
+
+from jsonhtl_md import note_to_markdown
 
 _CSS = """\
 * { box-sizing: border-box; }
@@ -508,6 +511,91 @@ def _not_found_page(key: str) -> str:
 # Router factory
 # ---------------------------------------------------------------------------
 
+# --- Content negotiation -------------------------------------------------
+# The whole URL tail after /notes/ is the note key, so the response format is
+# chosen purely from the Accept header — no ?query or .suffix, which would
+# collide with keys that legitimately contain '?', '.', etc. text/plain is an
+# alias for Markdown (JSONHTL Markdown is meant to be human-readable too).
+_FORMAT_MEDIA = [
+    ("html", "text/html"),
+    ("json", "application/json"),
+    ("json", "application/jsonhtl+json"),
+    ("markdown", "text/markdown"),
+    ("yaml", "application/yaml"),
+    ("yaml", "text/yaml"),
+    ("yaml", "application/x-yaml"),
+    ("plain", "text/plain"),
+]
+
+
+def _parse_accept(accept: str):
+    """Parse an Accept header into (type, subtype, q, order), sorted best-first."""
+    items = []
+    for order, part in enumerate(accept.split(",")):
+        part = part.strip()
+        if not part:
+            continue
+        tokens = part.split(";")
+        media = tokens[0].strip().lower()
+        q = 1.0
+        for tok in tokens[1:]:
+            tok = tok.strip()
+            if tok.startswith("q="):
+                try:
+                    q = float(tok[2:])
+                except ValueError:
+                    q = 0.0
+        typ, _, sub = media.partition("/")
+        items.append((typ, sub or "*", q, order))
+    items.sort(key=lambda it: (-it[2], it[3]))
+    return items
+
+
+def negotiate_format(accept):
+    """Pick a response format name from an Accept header. Returns None if the
+    client explicitly accepts nothing we can produce (-> 406). Absent/empty
+    Accept, or */*, yields 'html' (browser-friendly default)."""
+    if not accept or not accept.strip():
+        return "html"
+    ranges = _parse_accept(accept)
+    if not ranges:
+        return "html"
+    for typ, sub, q, _ in ranges:
+        if q <= 0:
+            continue
+        if typ == "*" and sub == "*":
+            return "html"
+        for fmt, media in _FORMAT_MEDIA:
+            mtyp, _, msub = media.partition("/")
+            if typ in (mtyp, "*") and sub in (msub, "*"):
+                return fmt
+    return None
+
+
+def _serve_note(key: str, doc, accept):
+    """Render a fetched note in the format negotiated from the Accept header."""
+    fmt = negotiate_format(accept)
+    headers = {"Vary": "Accept"}
+    if fmt is None:
+        return Response(
+            content="Not Acceptable: available types are text/html, "
+                    "application/json, application/jsonhtl+json, text/markdown, "
+                    "text/plain, application/yaml.\n",
+            status_code=406, media_type="text/plain; charset=utf-8", headers=headers,
+        )
+    if fmt == "json":
+        return Response(json.dumps(doc, ensure_ascii=False, indent=2),
+                        media_type="application/json", headers=headers)
+    if fmt == "yaml":
+        return Response(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True),
+                        media_type="application/yaml", headers=headers)
+    if fmt in ("markdown", "plain"):
+        media = "text/markdown" if fmt == "markdown" else "text/plain"
+        return Response(note_to_markdown(doc, key),
+                        media_type=f"{media}; charset=utf-8", headers=headers)
+    return HTMLResponse(_render_page(key, doc), headers=headers)
+
+
 def make_router(api_base: str) -> APIRouter:
     """Return an APIRouter that fetches notes from api_base (e.g. http://127.0.0.1:8020)."""
 
@@ -522,18 +610,18 @@ def make_router(api_base: str) -> APIRouter:
             return r.json()
 
     @router.get('/notes/', response_class=HTMLResponse)
-    async def notes_index():
+    async def notes_index(request: Request):
         doc = await _fetch('')
         if doc is None:
             return RedirectResponse('/notes/README')
-        return HTMLResponse(_render_page('', doc))
+        return _serve_note('', doc, request.headers.get('accept'))
 
     @router.get('/notes/{key:path}', response_class=HTMLResponse)
-    async def notes_view(key: str):
+    async def notes_view(key: str, request: Request):
         doc = await _fetch(key)
         if doc is None:
             return HTMLResponse(_not_found_page(key), status_code=404)
-        return HTMLResponse(_render_page(key, doc))
+        return _serve_note(key, doc, request.headers.get('accept'))
 
     @router.post('/writeback/{notename}')
     async def writeback_post(notename: str, request: Request):
