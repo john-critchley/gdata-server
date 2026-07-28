@@ -98,3 +98,24 @@ def test_expand_all_uses_inline_onclick_not_a_script_tag():
     assert "onclick=" in page
     assert ".open = true" in page
     assert "<script" not in page
+
+
+def test_table_sprint_rows_get_distinct_view_only_colours():
+    block = {
+        "table": {
+            "columns": ["Ticket", "Sprint / queue"],
+            "rows": [
+                ["OLD-1", "Hybrid Cloud Sprint 61"],
+                ["NEW-1", "Hybrid Cloud Sprint 62"],
+                ["NEXT-1", "Hybrid Cloud Sprint 63"],
+                ["BACKLOG-1", "Backlog"],
+            ],
+        }
+    }
+
+    rendered = notes_web._render_block(block)
+
+    assert '<tr style="background-color: #ffe08a;"><td>OLD-1</td>' in rendered
+    assert '<tr style="background-color: #b7d7ff;"><td>NEW-1</td>' in rendered
+    assert '<tr style="background-color: #d9d2e9;"><td>NEXT-1</td>' in rendered
+    assert '<tr><td>BACKLOG-1</td>' in rendered

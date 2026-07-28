@@ -274,10 +274,28 @@ def _render_block(block) -> str:
         cols = t.get('columns', [])
         rows = t.get('rows', [])
         ths = ''.join(f'<th>{_html.escape(str(c))}</th>' for c in cols)
+        sprint_col = next(
+            (i for i, col in enumerate(cols)
+             if str(col).strip().lower() in ('sprint', 'sprint / queue')),
+            None,
+        )
+        sprint_colours = (
+            '#cfe2f3', '#eadcf8', '#fce5cd', '#d0e0e3',
+            '#f4cccc', '#ffe08a', '#b7d7ff', '#d9d2e9',
+        )
         trs = ''
         for row in rows:
+            row_style = ''
+            if sprint_col is not None and sprint_col < len(row):
+                sprint_match = re.search(
+                    r'\bSprint\s+(\d+)\b', str(row[sprint_col]), re.IGNORECASE
+                )
+                if sprint_match:
+                    sprint_number = int(sprint_match.group(1))
+                    colour = sprint_colours[sprint_number % len(sprint_colours)]
+                    row_style = f' style="background-color: {colour};"'
             tds = ''.join(f'<td>{_md_inline(str(cell))}</td>' for cell in row)
-            trs += f'<tr>{tds}</tr>'
+            trs += f'<tr{row_style}>{tds}</tr>'
         return f'<table class="bks"><thead><tr>{ths}</tr></thead><tbody>{trs}</tbody></table>'
 
     if 'list' in block:

@@ -994,6 +994,10 @@ def make_rest_app(db_path: str, rest_port: int = 8020, store_name: str = "defaul
         response = await call_next(request)
         response.headers["X-GData-Store"] = store_name
         if os.path.getmtime(__file__) != _SOURCE_MTIME:
+            global _db
+            if _db is not None:
+                _db.close()
+                _db = None
             os.execv(sys.executable, [sys.executable] + sys.argv)
         return response
 

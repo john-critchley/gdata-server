@@ -542,11 +542,31 @@ class NotesHTMLRenderer:
                     f'<font color="#ffffff"><b>{self._escape(str(col))}</b></font></th>'
                 )
             html.append('</tr>')
-        # Data rows — alternating stripe on even rows (Python-side, no nth-child needed)
+        # Data rows — highlight sprint rows consistently without requiring
+        # presentation metadata in JSONHTL.  Fall back to alternating stripes.
+        sprint_col = None
+        for col_index, col in enumerate(columns):
+            if str(col).strip().lower() in ('sprint', 'sprint / queue'):
+                sprint_col = col_index
+                break
+        sprint_colours = (
+            '#cfe2f3', '#eadcf8', '#fce5cd', '#d0e0e3',
+            '#f4cccc', '#ffe08a', '#b7d7ff', '#d9d2e9',
+        )
         for i, row in enumerate(rows):
-            bg_attr = ' bgcolor="#f9f9f9"' if i % 2 == 1 else ''
-            html.append('<tr>')
+            row_colour = None
             cells = row if isinstance(row, list) else [row]
+            if sprint_col is not None and sprint_col < len(cells):
+                sprint_match = re.search(
+                    r'\bSprint\s+(\d+)\b', str(cells[sprint_col]), re.IGNORECASE
+                )
+                if sprint_match:
+                    sprint_number = int(sprint_match.group(1))
+                    row_colour = sprint_colours[sprint_number % len(sprint_colours)]
+            if row_colour is None and i % 2 == 1:
+                row_colour = '#f9f9f9'
+            bg_attr = f' bgcolor="{row_colour}"' if row_colour else ''
+            html.append('<tr>')
             for cell in cells:
                 html.append(
                     f'<td{bg_attr} style="border: 1px solid #ddd; padding: 8px;">'
