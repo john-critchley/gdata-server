@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import gdata
 import notes_client
 import svg_render
+from sheet_ui import RunnableSheetPanel
 
 
 def _load_settings_file(config_path=None):
@@ -148,6 +149,8 @@ def load_browser_config(args):
         cfg['control_udp_enabled'] = bool(args.control_udp_enabled)
     if args.control_unix_enabled is not None:
         cfg['control_unix_enabled'] = bool(args.control_unix_enabled)
+    if hasattr(args, 'page') and args.page is not None:
+        cfg['start_page'] = args.page
 
     # Coerce types.
     cfg['control_tcp_enabled'] = _to_bool(cfg['control_tcp_enabled'])
@@ -225,12 +228,8 @@ class NotesDataSource:
             elif self.db:
                 if key not in self.db:
                     return None
-                result = self.db[key]
-                # gdata_local.__getitem__ already returns a parsed dict;
-                # gdata_local_simple returns a string — handle both.
-                if isinstance(result, (str, bytes, bytearray)):
-                    return json.loads(result)
-                return result
+                json_str = self.db[key]
+                return json.loads(json_str)
             else:
                 return None
         except Exception as e:
@@ -271,27 +270,6 @@ class NotesDataSource:
             self.db.close()
 
 
-# JSONHTL inline span types that wrap plain text, mapped to their HTML tag.
-# Both the HTML renderer and the plain-text extractor dispatch through this,
-# so a new inline type is added in one place.
-INLINE_SPAN_TAGS = {
-    'code':   'code',
-    'bold':   'b',
-    'strong': 'b',
-    'italic': 'i',
-    'em':     'i',
-}
-
-
-def format_meta_value(value):
-    """Format a metadata value (e.g. tags) for display. List/tuple values are
-    joined as comma-separated text rather than shown as a raw Python repr like
-    ['chess', 'board']. Matches the web renderer's metadata formatting."""
-    if isinstance(value, (list, tuple)):
-        return ', '.join(str(v) for v in value)
-    return str(value)
-
-
 class NotesHTMLRenderer:
     """Convert JSONHTL note data to HTML for display."""
 
@@ -326,7 +304,7 @@ class NotesHTMLRenderer:
             meta_pairs = [(k, v) for k, v in data.items() if k not in ('title', 'content', 'runnable')]
             if meta_pairs:
                 parts = ' &nbsp;·&nbsp; '.join(
-                    f'<b>{self._escape(str(k))}</b> {self._escape(format_meta_value(v))}'
+                    f'<b>{self._escape(str(k))}</b> {self._escape(str(v))}'
                     for k, v in meta_pairs
                 )
                 html.append(
@@ -370,7 +348,7 @@ class NotesHTMLRenderer:
             elif isinstance(block, str):
                 html.append(f'<p>{self._escape(block)}</p>')
         return '\n'.join(html)
-
+    
     def _render_heading(self, heading, block_index=None):
         """Render a JSONHTL heading block."""
         if isinstance(heading, dict):
@@ -399,16 +377,15 @@ class NotesHTMLRenderer:
             elif isinstance(item, dict):
                 if 'link' in item:
                     result.append(self._render_link(item['link']))
+                elif 'code' in item:
+                    result.append(f'<code>{self._escape(item["code"])}</code>')
+                elif 'bold' in item:
+                    result.append(f'<b>{self._escape(item["bold"])}</b>')
                 elif 'href' in item:
                     # Direct link object
                     result.append(self._render_link(item))
                 else:
-                    key = next(iter(item), None)
-                    tag = INLINE_SPAN_TAGS.get(key)
-                    if tag:
-                        result.append(f'<{tag}>{self._escape(item[key])}</{tag}>')
-                    else:
-                        result.append(self._escape(str(item)))
+                    result.append(self._escape(str(item)))
             else:
                 result.append(self._escape(str(item)))
         return ''.join(result)
@@ -648,8 +625,10 @@ class NotesHtmlWindow(wx.html.HtmlWindow):
     
     def OnLinkClicked(self, link):
         """Handle link clicks - navigate:// links go to pages, others open externally."""
+        if getattr(self.browser, '_nav_locked', False):
+            return
         url = link.GetHref()
-        
+
         if url.startswith("navigate://"):
             # Internal navigation
             page_key = unquote(url[len("navigate://"):])
@@ -663,99 +642,6 @@ class NotesHtmlWindow(wx.html.HtmlWindow):
             self.browser._navigate_to(url)
 
 
-class ControlSettingsDialog(wx.Dialog):
-    """Dialog for configuring the control listening interface."""
-
-    def __init__(self, parent, config):
-        super().__init__(parent, title="Control Interface Settings",
-                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
-        self._build(config)
-        self.Fit()
-        self.CenterOnParent()
-
-    def _section_box(self, outer, label):
-        box = wx.StaticBox(outer, label=label)
-        sizer = wx.StaticBoxSizer(box, wx.VERTICAL)
-        grid = wx.FlexGridSizer(cols=2, vgap=4, hgap=8)
-        grid.AddGrowableCol(1)
-        return sizer, grid
-
-    def _build(self, cfg):
-        outer = wx.BoxSizer(wx.VERTICAL)
-
-        # --- TCP section ---
-        tcp_sizer, tcp_grid = self._section_box(self, "TCP")
-        self._tcp_enabled = wx.CheckBox(self, label="Enabled")
-        self._tcp_enabled.SetValue(bool(cfg.get('control_tcp_enabled', False)))
-        tcp_sizer.Add(self._tcp_enabled, 0, wx.ALL, 4)
-
-        tcp_grid.Add(wx.StaticText(self, label="Host:"), 0, wx.ALIGN_CENTER_VERTICAL)
-        self._tcp_host = wx.TextCtrl(self, value=str(cfg.get('control_host', '127.0.0.1')))
-        tcp_grid.Add(self._tcp_host, 1, wx.EXPAND)
-
-        tcp_grid.Add(wx.StaticText(self, label="Port:"), 0, wx.ALIGN_CENTER_VERTICAL)
-        self._tcp_port = wx.SpinCtrl(self, min=1, max=65535,
-                                     value=str(cfg.get('control_tcp_port', 8711)))
-        tcp_grid.Add(self._tcp_port, 1, wx.EXPAND)
-        tcp_sizer.Add(tcp_grid, 0, wx.EXPAND | wx.ALL, 4)
-        outer.Add(tcp_sizer, 0, wx.EXPAND | wx.ALL, 8)
-
-        # --- UDP section ---
-        udp_sizer, udp_grid = self._section_box(self, "UDP")
-        self._udp_enabled = wx.CheckBox(self, label="Enabled")
-        self._udp_enabled.SetValue(bool(cfg.get('control_udp_enabled', False)))
-        udp_sizer.Add(self._udp_enabled, 0, wx.ALL, 4)
-
-        udp_grid.Add(wx.StaticText(self, label="Host:"), 0, wx.ALIGN_CENTER_VERTICAL)
-        self._udp_host = wx.TextCtrl(self, value=str(cfg.get('control_host', '127.0.0.1')))
-        udp_grid.Add(self._udp_host, 1, wx.EXPAND)
-
-        udp_grid.Add(wx.StaticText(self, label="Port:"), 0, wx.ALIGN_CENTER_VERTICAL)
-        self._udp_port = wx.SpinCtrl(self, min=1, max=65535,
-                                     value=str(cfg.get('control_udp_port', 8711)))
-        udp_grid.Add(self._udp_port, 1, wx.EXPAND)
-        udp_sizer.Add(udp_grid, 0, wx.EXPAND | wx.ALL, 4)
-        outer.Add(udp_sizer, 0, wx.EXPAND | wx.ALL, 8)
-
-        # --- Unix socket section ---
-        unix_sizer, unix_grid = self._section_box(self, "Unix Socket")
-        self._unix_enabled = wx.CheckBox(self, label="Enabled")
-        self._unix_enabled.SetValue(bool(cfg.get('control_unix_enabled', False)))
-        unix_sizer.Add(self._unix_enabled, 0, wx.ALL, 4)
-
-        unix_grid.Add(wx.StaticText(self, label="Socket path:"), 0, wx.ALIGN_CENTER_VERTICAL)
-        self._unix_socket = wx.TextCtrl(self, value=str(cfg.get('control_unix_socket', '')))
-        unix_grid.Add(self._unix_socket, 1, wx.EXPAND)
-        unix_sizer.Add(unix_grid, 0, wx.EXPAND | wx.ALL, 4)
-        outer.Add(unix_sizer, 0, wx.EXPAND | wx.ALL, 8)
-
-        # --- Shared token ---
-        token_sizer, token_grid = self._section_box(self, "Authentication")
-        token_grid.Add(wx.StaticText(self, label="Token:"), 0, wx.ALIGN_CENTER_VERTICAL)
-        self._token = wx.TextCtrl(self, value=str(cfg.get('control_token', '')))
-        token_grid.Add(self._token, 1, wx.EXPAND)
-        token_sizer.Add(token_grid, 0, wx.EXPAND | wx.ALL, 4)
-        outer.Add(token_sizer, 0, wx.EXPAND | wx.ALL, 8)
-
-        # --- Buttons ---
-        btn_sizer = self.CreateButtonSizer(wx.OK | wx.CANCEL)
-        outer.Add(btn_sizer, 0, wx.EXPAND | wx.ALL, 8)
-
-        self.SetSizer(outer)
-
-    def get_values(self):
-        return {
-            'control_tcp_enabled': self._tcp_enabled.GetValue(),
-            'control_udp_enabled': self._udp_enabled.GetValue(),
-            'control_unix_enabled': self._unix_enabled.GetValue(),
-            'control_host': self._tcp_host.GetValue().strip() or '127.0.0.1',
-            'control_tcp_port': self._tcp_port.GetValue(),
-            'control_udp_port': self._udp_port.GetValue(),
-            'control_unix_socket': self._unix_socket.GetValue().strip(),
-            'control_token': self._token.GetValue(),
-        }
-
-
 class NotesBrowser(wx.Frame):
     """Main browser window."""
 
@@ -766,7 +652,6 @@ class NotesBrowser(wx.Frame):
     ID_ZOOM_IN = wx.NewIdRef()
     ID_ZOOM_OUT = wx.NewIdRef()
     ID_ZOOM_RESET = wx.NewIdRef()
-    ID_PREFERENCES = wx.NewIdRef()
 
     BASE_HTML_FONT = 10
 
@@ -793,13 +678,16 @@ class NotesBrowser(wx.Frame):
         self.last_selection_mode = 'none'
         self._page_meta_text = ''
         self.control_server = None
-        
+        self.sheet_panel = None
+        self._nav_locked = False
+
         # Detect background brightness for text colour choices
         self._bg_is_dark = None  # resolved lazily after UI is created
         
         self._create_ui()
         self.Bind(wx.EVT_CLOSE, self._on_close)
-        self._navigate_to("")  # Start at root
+        start_page = config.get('start_page', '')
+        self._navigate_to(start_page)  # Start at root (or configured page)
         self._update_base_url_status()
         self._start_control_server()
     
@@ -811,6 +699,9 @@ class NotesBrowser(wx.Frame):
         # File menu
         file_menu = wx.Menu()
         open_item = file_menu.Append(wx.ID_OPEN, "&Open Page\tCtrl+O", "Open any page")
+        file_menu.AppendSeparator()
+        self.save_item = file_menu.Append(wx.ID_SAVE, "&Save Sheet\tCtrl+S", "Save current runnable sheet")
+        self.save_item.Enable(False)
         file_menu.AppendSeparator()
         exit_item = file_menu.Append(wx.ID_EXIT, "E&xit\tCtrl+Q", "Exit application")
         menubar.Append(file_menu, "&File")
@@ -838,16 +729,12 @@ class NotesBrowser(wx.Frame):
         zoom_out_item = view_menu.Append(self.ID_ZOOM_OUT, "Zoom &Out\tCtrl+-", "Decrease content size")
         zoom_reset_item = view_menu.Append(self.ID_ZOOM_RESET, "Zoom &Reset\tCtrl+0", "Reset content size")
         menubar.Append(view_menu, "&View")
-
-        # Settings menu
-        settings_menu = wx.Menu()
-        prefs_item = settings_menu.Append(self.ID_PREFERENCES, "&Control Interface…", "Configure control listening interface")
-        menubar.Append(settings_menu, "&Settings")
-
+        
         self.SetMenuBar(menubar)
-
+        
         # Bind menu events
         self.Bind(wx.EVT_MENU, self._on_open, open_item)
+        self.Bind(wx.EVT_MENU, self._on_save, self.save_item)
         self.Bind(wx.EVT_MENU, self._on_exit, exit_item)
         self.Bind(wx.EVT_MENU, self._on_back, back_item)
         self.Bind(wx.EVT_MENU, self._on_forward, forward_item)
@@ -860,7 +747,6 @@ class NotesBrowser(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_zoom_in, zoom_in_item)
         self.Bind(wx.EVT_MENU, self._on_zoom_out, zoom_out_item)
         self.Bind(wx.EVT_MENU, self._on_zoom_reset, zoom_reset_item)
-        self.Bind(wx.EVT_MENU, self._on_control_settings, prefs_item)
         
         # Set up accelerator table for keys that don't work well as menu shortcuts
         accel_entries = [
@@ -915,11 +801,16 @@ class NotesBrowser(wx.Frame):
         self.selection_info = wx.StaticText(panel, label="Selection: (none)")
         sizer.Add(self.selection_info, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
         
-        # HTML viewer - use HtmlWindow (always available, unlike WebView)
-        self.html = NotesHtmlWindow(panel, self)
+        # Content host: swaps between HtmlWindow (normal docs) and RunnableSheetPanel
+        self.content_host = wx.Panel(panel)
+        self.content_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.content_host.SetSizer(self.content_sizer)
+
+        self.html = NotesHtmlWindow(self.content_host, self)
         self.html.Bind(wx.EVT_MOUSEWHEEL, self._on_html_mousewheel)
-        
-        sizer.Add(self.html, 1, wx.EXPAND)
+        self.content_sizer.Add(self.html, 1, wx.EXPAND)
+
+        sizer.Add(self.content_host, 1, wx.EXPAND)
         
         panel.SetSizer(sizer)
 
@@ -1366,17 +1257,6 @@ class NotesBrowser(wx.Frame):
             self.control_server = None
             self._set_status(f"Control start failed: {e}")
 
-    def _on_control_settings(self, _event):
-        dlg = ControlSettingsDialog(self, self.config)
-        if dlg.ShowModal() == wx.ID_OK:
-            updates = dlg.get_values()
-            self.config.update(updates)
-            if self.control_server:
-                self.control_server.stop()
-                self.control_server = None
-            self._start_control_server()
-        dlg.Destroy()
-
     def _update_base_url_status(self):
         base = str(self.config.get('html_base_url', '')).rstrip('/')
         source = self.config.get('html_base_url_source', 'fallback')
@@ -1494,14 +1374,12 @@ class NotesBrowser(wx.Frame):
                         parts.append(str(link.get('text', link.get('href', ''))))
                     else:
                         parts.append(str(link))
+                elif 'code' in item:
+                    parts.append(str(item['code']))
                 elif 'href' in item:
                     parts.append(str(item.get('text', item.get('href', ''))))
                 else:
-                    key = next(iter(item), None)
-                    if INLINE_SPAN_TAGS.get(key):
-                        parts.append(str(item[key]))
-                    else:
-                        parts.append(str(item))
+                    parts.append(str(item))
             else:
                 parts.append(str(item))
         return ''.join(parts)
@@ -1654,19 +1532,54 @@ class NotesBrowser(wx.Frame):
         self.renderer.selection_range = self.selection_range
         self.renderer.use_selection_markup = (self.last_selection_mode == 'logical-only')
         data = self.data_source.read(page_key)
-        html = self.renderer.render(page_key, data)
-        
-        # Load HTML into viewer
-        self.html.SetPage(html)
+        self._display_page(page_key, data)
         # Store metadata for status line display
         self._page_meta_text = ''
         if isinstance(data, dict):
-            pairs = [(k, format_meta_value(v)) for k, v in data.items() if k not in ('title', 'content')]
+            pairs = [(k, str(v)) for k, v in data.items() if k not in ('title', 'content')]
             if pairs:
                 self._page_meta_text = '  ·  '.join(f'{k}: {v}' for k, v in pairs)
         self._update_selection_indicator()
         self._set_status(f"Loaded page: {page_key or '(root)'}")
     
+    def _display_page(self, key, data):
+        if isinstance(data, dict) and data.get('runnable') is True:
+            self._show_sheet(key, data)
+        else:
+            self._show_html(key, data)
+
+    def _show_html(self, key, data):
+        if self.sheet_panel is not None:
+            self.content_sizer.Detach(self.sheet_panel)
+            self.sheet_panel.Destroy()
+            self.sheet_panel = None
+            self.save_item.Enable(False)
+        if not self.html.IsShown():
+            self.html.Show()
+            if self.html.GetContainingSizer() is None:
+                self.content_sizer.Add(self.html, 1, wx.EXPAND)
+        html = self.renderer.render(key, data)
+        self.html.SetPage(html)
+        self.content_host.Layout()
+
+    def _show_sheet(self, key, data):
+        self.html.Hide()
+        if self.sheet_panel is not None:
+            self.content_sizer.Detach(self.sheet_panel)
+            self.sheet_panel.Destroy()
+            self.sheet_panel = None
+        self.sheet_panel = RunnableSheetPanel(self.content_host, self, key, data)
+        self.content_sizer.Add(self.sheet_panel, 1, wx.EXPAND)
+        self.sheet_panel.Show()
+        self.content_host.Layout()
+        self.save_item.Enable(True)
+
+    def _set_nav_enabled(self, enabled):
+        self._nav_locked = not enabled
+        for ctrl in (self.back_btn, self.forward_btn, self.home_btn,
+                     self.refresh_btn, self.page_text):
+            ctrl.Enable(enabled)
+
     def _on_open(self, event):
         """Open a specific page."""
         dlg = wx.TextEntryDialog(self, "Enter page name:", "Open Page")
@@ -1675,6 +1588,11 @@ class NotesBrowser(wx.Frame):
             self._navigate_to(page_key)
         dlg.Destroy()
     
+    def _on_save(self, event):
+        if self.sheet_panel is not None and not self.sheet_panel.is_running:
+            self.sheet_panel.save_page()
+            self._set_status(f"Saved: {self.current_page}")
+
     def _on_exit(self, event):
         """Exit the application."""
         self.Close(True)
@@ -1856,6 +1774,22 @@ class NotesBrowser(wx.Frame):
                     'ui.capture_screenshot',
                     'ui.capture_sixel',
                     'ui.quit',
+                    'sheet.inputs.list',
+                    'sheet.inputs.set',
+                    'sheet.inputs.set_many',
+                    'sheet.cell.run',
+                    'sheet.cell.scroll_into_view',
+                    'sheet.run_all',
+                    'sheet.save_page',
+                    'sheet.fix_as_new_note',
+                    'sheet.save_data',
+                    'sheet.load_data',
+                    'sheet.clear_outputs',
+                    'sheet.export_state',
+                    'sheet.import_state',
+                    'sheet.cell.get_output',
+                    'sheet.get_state',
+                    'sheet.restart',
                 ]
             }
 
@@ -2108,6 +2042,224 @@ class NotesBrowser(wx.Frame):
             wx.CallAfter(self.Close)
             return {'status': 'quitting'}
 
+        # --- Sheet methods ---
+
+        def _require_sheet():
+            sp = self.sheet_panel
+            if sp is None:
+                raise ValueError('No runnable sheet is active (SHEET_NOT_ACTIVE)')
+            return sp
+
+        if method == 'sheet.inputs.list':
+            sp = _require_sheet()
+            inputs = []
+            for cell_id in sp.exec_cell_order:
+                panel = sp.cell_panels[cell_id]
+                for i, ctrl in enumerate(panel.input_ctrls):
+                    prompt = sp.cells[cell_id]['input_prompts'][i] if i < len(sp.cells[cell_id]['input_prompts']) else ''
+                    inputs.append({'id': f'{cell_id}/{i}', 'cell': cell_id, 'input_index': i,
+                                   'label': prompt or f'Input {i+1}', 'value': ctrl.GetValue()})
+            return {'doc_key': self.current_page, 'inputs': inputs}
+
+        if method == 'sheet.inputs.set':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            field_id = params.get('id')
+            value = params.get('value')
+            if not isinstance(field_id, str) or not isinstance(value, str):
+                raise ValueError("'id' and 'value' must be strings")
+            try:
+                cell_id, idx_str = field_id.rsplit('/', 1)
+                idx = int(idx_str)
+            except (ValueError, AttributeError):
+                raise ValueError(f'Invalid input field id: {field_id!r}')
+            panel = sp.cell_panels.get(cell_id)
+            if panel is None or idx < 0 or idx >= len(panel.input_ctrls):
+                raise KeyError(f'Input field not found: {field_id!r}')
+            panel.input_ctrls[idx].SetValue(value)
+            return {'id': field_id, 'value': value}
+
+        if method == 'sheet.inputs.set_many':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            values = params.get('values', {})
+            if not isinstance(values, dict):
+                raise ValueError("'values' must be an object")
+            # Validate all first
+            parsed = {}
+            for fid, val in values.items():
+                if not isinstance(val, str):
+                    raise ValueError(f'Value for {fid!r} must be a string')
+                try:
+                    cell_id, idx_str = fid.rsplit('/', 1)
+                    idx = int(idx_str)
+                except (ValueError, AttributeError):
+                    raise ValueError(f'Invalid input field id: {fid!r}')
+                panel = sp.cell_panels.get(cell_id)
+                if panel is None or idx < 0 or idx >= len(panel.input_ctrls):
+                    raise KeyError(f'Input field not found: {fid!r}')
+                parsed[fid] = (panel, idx, val)
+            updated = []
+            for fid, (panel, idx, val) in parsed.items():
+                panel.input_ctrls[idx].SetValue(val)
+                updated.append({'id': fid, 'value': val})
+            return {'updated': updated, 'count': len(updated)}
+
+        if method == 'sheet.cell.scroll_into_view':
+            sp = _require_sheet()
+            cell_ref = params.get('cell')
+            if cell_ref is None:
+                raise ValueError("'cell' is required")
+            if isinstance(cell_ref, int):
+                if cell_ref < 0 or cell_ref >= len(sp.exec_cell_order):
+                    raise KeyError(f'Cell index out of range: {cell_ref}')
+                cell_id = sp.exec_cell_order[cell_ref]
+            else:
+                cell_id = str(cell_ref)
+                if cell_id not in sp.cells:
+                    raise KeyError(f'Cell not found: {cell_id!r}')
+            wx.CallAfter(sp.scroll_cell_into_view, cell_id)
+            return {'cell': cell_id}
+
+        if method == 'sheet.cell.run':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            cell_ref = params.get('cell')
+            if cell_ref is None:
+                raise ValueError("'cell' is required")
+            if isinstance(cell_ref, int):
+                if cell_ref < 0 or cell_ref >= len(sp.exec_cell_order):
+                    raise KeyError(f'Cell index out of range: {cell_ref}')
+                cell_id = sp.exec_cell_order[cell_ref]
+            else:
+                cell_id = str(cell_ref)
+                if cell_id not in sp.cells:
+                    raise KeyError(f'Cell not found: {cell_id!r}')
+            scroll = params.get('scroll', True)
+            sp.run_cell(cell_id, scroll=scroll)
+            panel = sp.cell_panels[cell_id]
+            return {'cell': cell_id, 'status': panel.status_label.GetLabel(),
+                    'output': panel.get_stdout_text()}
+
+        if method == 'sheet.run_all':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            scroll = params.get('scroll', True)
+            sp._on_run_all(scroll=scroll)
+            results = []
+            for cell_id in sp.exec_cell_order:
+                panel = sp.cell_panels[cell_id]
+                results.append({'cell': cell_id, 'status': panel.status_label.GetLabel(),
+                                'output': panel.get_stdout_text()})
+            return {'cells': results}
+
+        if method == 'sheet.clear_outputs':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            sp._on_clear_outputs()
+            return {'cleared': True}
+
+        if method == 'sheet.save_page':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            return sp.save_page()
+
+        if method == 'sheet.fix_as_new_note':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            new_key = params.get('key')
+            if new_key is not None and not isinstance(new_key, str):
+                raise ValueError("'key' must be a string if given")
+            return sp.fix_as_new_note(new_key)
+
+        if method == 'sheet.save_data':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            path = params.get('path')
+            if not isinstance(path, str) or not path.strip():
+                raise ValueError("'path' must be a non-empty string")
+            return sp.export_data(path)
+
+        if method == 'sheet.load_data':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            path = params.get('path')
+            if not isinstance(path, str) or not path.strip():
+                raise ValueError("'path' must be a non-empty string")
+            return sp.import_data(path)
+
+        if method == 'sheet.export_state':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            path = params.get('path')
+            if not isinstance(path, str) or not path.strip():
+                raise ValueError("'path' must be a non-empty string")
+            return sp.export_data(path)
+
+        if method == 'sheet.import_state':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            path = params.get('path')
+            if not isinstance(path, str) or not path.strip():
+                raise ValueError("'path' must be a non-empty string")
+            return sp.import_data(path)
+
+        if method == 'sheet.cell.get_output':
+            sp = _require_sheet()
+            cell_ref = params.get('cell')
+            if cell_ref is None:
+                raise ValueError("'cell' is required")
+            if isinstance(cell_ref, int):
+                if cell_ref < 0 or cell_ref >= len(sp.exec_cell_order):
+                    raise KeyError(f'Cell index out of range: {cell_ref}')
+                cell_id = sp.exec_cell_order[cell_ref]
+            else:
+                cell_id = str(cell_ref)
+                if cell_id not in sp.cells:
+                    raise KeyError(f'Cell not found: {cell_id!r}')
+            panel = sp.cell_panels[cell_id]
+            return {'cell': cell_id, 'status': panel.status_label.GetLabel(),
+                    'output': panel.get_stdout_text()}
+
+        if method == 'sheet.get_state':
+            sp = _require_sheet()
+            include_outputs = bool(params.get('include_outputs', False))
+            cells_out = []
+            for cell_id in sp.exec_cell_order:
+                cell = sp.cells[cell_id]
+                panel = sp.cell_panels[cell_id]
+                entry = {
+                    'cell': cell_id,
+                    'lang': cell.get('lang', ''),
+                    'input_count': len(panel.input_ctrls),
+                    'inputs': [{'id': f'{cell_id}/{i}', 'value': ctrl.GetValue()}
+                               for i, ctrl in enumerate(panel.input_ctrls)],
+                    'status': panel.status_label.GetLabel(),
+                }
+                if include_outputs:
+                    entry['output'] = panel.get_stdout_text()
+                cells_out.append(entry)
+            return {'doc_key': self.current_page, 'is_running': sp.is_running,
+                    'cells': cells_out}
+
+        if method == 'sheet.restart':
+            sp = _require_sheet()
+            if sp.is_running:
+                raise ValueError('Sheet is busy (SHEET_BUSY)')
+            sp._on_restart_kernel()
+            return {'restarted': True}
+
         raise KeyError(f'Method not found: {method}')
 
 
@@ -2205,7 +2357,7 @@ class RemoteControlServer:
                 done.set()
 
         wx.CallAfter(_run)
-        if not done.wait(timeout=10):
+        if not done.wait(timeout=600):
             raise TimeoutError('UI thread timeout')
         if 'error' in holder:
             raise holder['error']
@@ -2463,7 +2615,12 @@ def main():
         help="Optional shared token for JSON-RPC control requests",
         default=None
     )
-    
+    parser.add_argument(
+        "--page",
+        help="Initial page key to navigate to on startup",
+        default=None
+    )
+
     args = parser.parse_args()
     
     cfg = load_browser_config(args)
