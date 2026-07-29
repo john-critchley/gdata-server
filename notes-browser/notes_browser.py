@@ -1960,7 +1960,6 @@ class NotesBrowser(wx.Frame):
                     'selection.set_and_capture',
                     'links.get_current',
                     'ui.set_window_size',
-                    'ui.capture_screenshot',
                     'ui.capture_content',
                     'ui.capture_sixel',
                     'ui.quit',
@@ -2200,11 +2199,6 @@ class NotesBrowser(wx.Frame):
                 'key': key,
                 'url': self._page_key_to_html_url(key),
             }
-
-        if method == 'ui.capture_screenshot':
-            out_path = params.get('path')
-            saved = self._capture_window_screenshot(out_path=out_path)
-            return {'path': saved}
 
         if method == 'ui.capture_content':
             out_path = params.get('path')
@@ -2574,7 +2568,7 @@ class RemoteControlServer:
         if req.get('jsonrpc') != '2.0' or not isinstance(method, str):
             return self._make_error(req_id, -32600, 'Invalid Request')
 
-        if method in ('ui.capture_screenshot', 'ui.capture_content', 'ui.capture_sixel') and transport == 'udp':
+        if method in ('ui.capture_content', 'ui.capture_sixel') and transport == 'udp':
             return self._make_error(req_id, -32601, 'Method not available on UDP transport')
 
         try:
