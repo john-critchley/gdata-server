@@ -1012,6 +1012,37 @@ class NotesBrowser(wx.Frame):
             mem.SelectObject(wx.NullBitmap)
         return bitmap
 
+    def _render_content_bitmap(self):
+        """Render the page content off-screen into a wx.Bitmap.
+
+        Unlike _capture_window_bitmap (which blits the on-screen client area and
+        so needs the window raised and unobscured), this draws the HtmlWindow's
+        internal cell tree straight to a MemoryDC. It works while the window is
+        behind others or off-screen — so an automated capture never steals focus
+        or disturbs whatever else is using the display — and it renders the FULL
+        document, not just the visible viewport.
+        """
+        self._flush_ui_updates()
+        cell = self.html.GetInternalRepresentation()
+        if cell is None:
+            raise RuntimeError('No rendered content to capture')
+        width = self.html.GetClientSize().width
+        if width <= 0:
+            width = 900
+        height = cell.GetHeight()
+        if height <= 0:
+            raise RuntimeError('Rendered content has no height')
+        bitmap = wx.Bitmap(width, height)
+        mem = wx.MemoryDC(bitmap)
+        try:
+            bg = self.html.GetBackgroundColour()
+            mem.SetBackground(wx.Brush(bg if bg.IsOk() else wx.Colour(255, 255, 255)))
+            mem.Clear()
+            cell.Draw(mem, 0, 0, 0, height, wx.html.HtmlRenderingInfo())
+        finally:
+            mem.SelectObject(wx.NullBitmap)
+        return bitmap
+
     def _sixel_rle_encode(self, chars):
         """Run-length encode SIXEL data chars."""
         if not chars:
@@ -1130,6 +1161,28 @@ class NotesBrowser(wx.Frame):
         if not bitmap.SaveFile(str(target), wx.BITMAP_TYPE_PNG):
             raise RuntimeError(f'Failed to write screenshot: {target}')
         self._set_status(f'Screenshot saved: {target}')
+        return str(target)
+
+    def _capture_content_render(self, out_path=None):
+        """Render the page CONTENT to a PNG off-screen (no screen scrape, no
+        window raise) and return the path."""
+        assert out_path is None or isinstance(out_path, str)
+        root_str = self.config.get('project_root') or os.environ.get('PWD') or str(Path.cwd())
+        project_root = Path(root_str)
+        if out_path:
+            target = Path(out_path)
+            if not target.is_absolute():
+                target = project_root / target
+        else:
+            shots_dir = project_root / 'notes-browser' / 'screenshots'
+            shots_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+            target = shots_dir / f'notes-content-{stamp}.png'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        bitmap = self._render_content_bitmap()
+        if not bitmap.SaveFile(str(target), wx.BITMAP_TYPE_PNG):
+            raise RuntimeError(f'Failed to write content image: {target}')
+        self._set_status(f'Content image saved: {target}')
         return str(target)
 
     def _resolve_output_path(self, out_path, default_name):
@@ -1908,6 +1961,7 @@ class NotesBrowser(wx.Frame):
                     'links.get_current',
                     'ui.set_window_size',
                     'ui.capture_screenshot',
+                    'ui.capture_content',
                     'ui.capture_sixel',
                     'ui.quit',
                     'sheet.inputs.list',
@@ -2150,6 +2204,11 @@ class NotesBrowser(wx.Frame):
         if method == 'ui.capture_screenshot':
             out_path = params.get('path')
             saved = self._capture_window_screenshot(out_path=out_path)
+            return {'path': saved}
+
+        if method == 'ui.capture_content':
+            out_path = params.get('path')
+            saved = self._capture_content_render(out_path=out_path)
             return {'path': saved}
 
         if method == 'ui.capture_sixel':
@@ -2515,7 +2574,7 @@ class RemoteControlServer:
         if req.get('jsonrpc') != '2.0' or not isinstance(method, str):
             return self._make_error(req_id, -32600, 'Invalid Request')
 
-        if method in ('ui.capture_screenshot', 'ui.capture_sixel') and transport == 'udp':
+        if method in ('ui.capture_screenshot', 'ui.capture_content', 'ui.capture_sixel') and transport == 'udp':
             return self._make_error(req_id, -32601, 'Method not available on UDP transport')
 
         try:
