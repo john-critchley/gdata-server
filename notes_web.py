@@ -459,7 +459,46 @@ def _meta_html(doc: dict) -> str:
     return f'<div class="meta">{parts}</div>'
 
 
+def _coerce_doc(doc):
+    """Best-effort normalise a fetched document to a dict.
+
+    Recovers from the two known corruption shapes (see
+    gdata-server/troubleshooting) so a bad note degrades gracefully rather than
+    500-ing the renderer:
+      • double-encoded — the value is JSON serialised to a string (possibly more
+        than once) instead of an object: json.loads until it is no longer a str.
+      • list-wrapped — a single-element ops list [{...}]: unwrap to the element.
+    Anything that still isn't a dict is returned unchanged for the caller to
+    handle (e.g. a malformed-note page)."""
+    for _ in range(5):
+        if not isinstance(doc, str):
+            break
+        try:
+            doc = json.loads(doc)
+        except (ValueError, TypeError):
+            break
+    if isinstance(doc, list) and len(doc) == 1 and isinstance(doc[0], dict):
+        doc = doc[0]
+    return doc
+
+
+def _malformed_page(key: str) -> str:
+    ek = _html.escape(key)
+    return (
+        f'<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
+        f'<title>Malformed note</title></head><body>'
+        f'<h1>Note could not be rendered</h1>'
+        f'<p>The stored document for <code>{ek}</code> is not a valid JSONHTL '
+        f'object (it may be double-encoded or otherwise corrupted). '
+        f'See <code>gdata-server/troubleshooting</code>.</p>'
+        f'<p><a href="/notes/">Notes index</a></p>'
+        f'</body></html>'
+    )
+
+
 def _render_page(key: str, doc: dict) -> str:
+    if not isinstance(doc, dict):
+        return _malformed_page(key)
     title = _html.escape(doc.get('title', key))
     content_html = _render_content(doc.get('content', ''), skip_h1='title' in doc)
     body_parts = [
@@ -583,6 +622,8 @@ def _serve_note(key: str, doc, accept):
                     "text/plain, application/yaml.\n",
             status_code=406, media_type="text/plain; charset=utf-8", headers=headers,
         )
+    # Auto-recover the known corruption shapes so no format 500s on a bad note.
+    doc = _coerce_doc(doc)
     if fmt == "json":
         return Response(json.dumps(doc, ensure_ascii=False, indent=2),
                         media_type="application/json", headers=headers)
@@ -593,6 +634,9 @@ def _serve_note(key: str, doc, accept):
         media = "text/markdown" if fmt == "markdown" else "text/plain"
         return Response(note_to_markdown(doc, key),
                         media_type=f"{media}; charset=utf-8", headers=headers)
+    if not isinstance(doc, dict):
+        # Unrecoverable: render a clean error page, flagged 500 (no traceback).
+        return HTMLResponse(_malformed_page(key), status_code=500, headers=headers)
     return HTMLResponse(_render_page(key, doc), headers=headers)
 
 
