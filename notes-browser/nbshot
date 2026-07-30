@@ -6,12 +6,16 @@ off-screen (no window raise, no focus theft, full page — uses
 ui.capture_content).
 
 Usage:
-    nbshot <note-key> [out.png]        navigate + capture (default out ~/tmp/nbshot.png)
+    nbshot <note-key> [out.png]         navigate + capture (default out ~/tmp/nbshot.png)
+    nbshot --caps                       list available control methods
     nbshot --rpc <method> [json-params] send any control method, print the reply
-    nbshot --caps                      list available control methods
+    nbshot -h | --help                  show this help
 
 Env:
     NOTES_BROWSER_SOCK   socket path (default ~/tmp/notes-browser.sock)
+
+Full docs: notes key  gdata-server/nbshot
+           https://www.critchley.biz/notes/gdata-server/nbshot
 """
 import json
 import os
@@ -28,7 +32,8 @@ def rpc(method, params=None, timeout=20.0):
         s.connect(SOCK)
     except OSError as e:
         sys.exit(f"nbshot: cannot connect to {SOCK}: {e}\n"
-                 "Is the notes browser running with --control-unix-socket?")
+                 "Is the notes browser running with --control-unix-socket?\n"
+                 "See: gdata-server/nbshot")
     s.sendall((json.dumps({"jsonrpc": "2.0", "id": 1, "method": method,
                            "params": params or {}}) + "\n").encode())
     buf = b""
