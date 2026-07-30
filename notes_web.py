@@ -193,6 +193,21 @@ def _render_inlines(items) -> str:
     return joined
 
 
+def _render_cell(cell) -> str:
+    """Render a table cell. A cell is a string (markdown inline permitted) or
+    a list of inline elements (same content model as para), so links and other
+    inline objects render in cells exactly as in a paragraph. A bare inline
+    dict is accepted as shorthand for a single-element list. See README/format.
+    """
+    if isinstance(cell, list):
+        return _render_inlines(cell)
+    if isinstance(cell, dict):
+        return _render_inline(cell)
+    if isinstance(cell, str):
+        return _md_inline(cell)
+    return _md_inline(str(cell))
+
+
 def _render_list_item(item) -> str:
     if isinstance(item, str):
         return f'<li>{_md_inline(item)}</li>'
@@ -309,7 +324,7 @@ def _render_block(block) -> str:
                     sprint_number = int(sprint_match.group(1))
                     colour = sprint_colours[sprint_number % len(sprint_colours)]
                     row_style = f' style="background-color: {colour};"'
-            tds = ''.join(f'<td>{_md_inline(str(cell))}</td>' for cell in row)
+            tds = ''.join(f'<td>{_render_cell(cell)}</td>' for cell in row)
             trs += f'<tr{row_style}>{tds}</tr>'
         return f'<table class="bks"><thead><tr>{ths}</tr></thead><tbody>{trs}</tbody></table>'
 

@@ -546,6 +546,20 @@ class NotesHTMLRenderer:
             '</table>'
         )
 
+    def _render_cell(self, cell):
+        """Render a table cell: a string (markdown inline permitted) or a list
+        of inline elements (same content model as para), so links and other
+        inline objects render in cells exactly as in a paragraph. A bare inline
+        dict is treated as a single-element list. See README/format.
+        """
+        if isinstance(cell, list):
+            return self._render_inline_list(cell)
+        if isinstance(cell, dict):
+            return self._render_inline_list([cell])
+        if isinstance(cell, str):
+            return self._render_markup_text(cell)
+        return self._render_markup_text(str(cell))
+
     def _render_table(self, table):
         """Render a JSONHTL table block as an HTML table."""
         if not isinstance(table, dict):
@@ -593,7 +607,7 @@ class NotesHTMLRenderer:
             for cell in cells:
                 html.append(
                     f'<td{bg_attr} style="border: 1px solid #ddd; padding: 8px;">'
-                    f'{self._render_markup_text(str(cell))}</td>'
+                    f'{self._render_cell(cell)}</td>'
                 )
             html.append('</tr>')
         html.append('</table>')

@@ -270,6 +270,61 @@ def test_table_sprint_match_is_case_insensitive(renderer):
 
 
 # ---------------------------------------------------------------------------
+# 3b. _render_table — inline-element cells (links etc.), same model as para
+# ---------------------------------------------------------------------------
+
+def test_table_cell_inline_list_internal_link(renderer):
+    # A cell may be a list of inline elements; an internal link becomes a
+    # navigate:// note link, exactly as in a paragraph.
+    html = renderer._render_table({
+        "columns": ["Ticket", "Summary"],
+        "rows": [[
+            [{"link": {"href": "jira/tickets/HCLPDRM-38781", "text": "HCLPDRM-38781"}}],
+            "Portal UI",
+        ]],
+    })
+    assert "navigate://jira/tickets/HCLPDRM-38781" in html
+    assert ">HCLPDRM-38781</a>" in html
+    assert ">Portal UI</td>" in html  # plain string cell still renders as text
+
+
+def test_table_cell_inline_list_external_link(renderer):
+    html = renderer._render_table({
+        "columns": ["Link"],
+        "rows": [[[{"link": {"href": "https://example.com/x", "text": "x"}}]]],
+    })
+    assert 'href="https://example.com/x"' in html
+    assert ">x</a>" in html
+
+
+def test_table_cell_bare_inline_dict_shorthand(renderer):
+    # A bare inline dict is accepted as shorthand for a single-element list.
+    html = renderer._render_table({
+        "columns": ["Link"],
+        "rows": [[{"link": {"href": "getting-started", "text": "Start"}}]],
+    })
+    assert "navigate://getting-started" in html
+    assert ">Start</a>" in html
+
+
+def test_table_cell_link_text_is_escaped(renderer):
+    html = renderer._render_table({
+        "columns": ["Link"],
+        "rows": [[[{"link": {"href": "k", "text": "a<b>c"}}]]],
+    })
+    assert ">a&lt;b&gt;c</a>" in html
+
+
+def test_table_mixed_string_and_inline_cells_in_row(renderer):
+    html = renderer._render_table({
+        "columns": ["A", "B"],
+        "rows": [["**bold**", [{"link": {"href": "k", "text": "L"}}]]],
+    })
+    assert "<b>bold</b>" in html
+    assert "navigate://k" in html and ">L</a>" in html
+
+
+# ---------------------------------------------------------------------------
 # 4. Metadata value formatting — list/tuple joined, not shown as raw repr
 # ---------------------------------------------------------------------------
 
