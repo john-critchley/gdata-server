@@ -12,6 +12,7 @@ import html as _html
 import json
 import os
 import re
+import urllib.parse
 from datetime import datetime, timezone
 
 import httpx
@@ -19,7 +20,26 @@ import yaml
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
 
+import gdata_oauth
 from jsonhtl_md import note_to_markdown
+
+# ---------------------------------------------------------------------------
+# Mount + auth configuration (per-process; public and private run separately)
+# ---------------------------------------------------------------------------
+# PREFIX is the URL path the renderer is mounted at and the prefix every emitted
+# link uses. Public defaults to /notes; the private store sets NOTES_WEB_PREFIX
+# (e.g. /private) so a private page never links back into the public store.
+PREFIX = "/" + os.environ.get("NOTES_WEB_PREFIX", "/notes").strip("/")
+
+# Opt-in auth gate. Off for the public store (unauthenticated), on for private.
+# When on, every render request must carry a valid token (session cookie or
+# Authorization: Bearer); otherwise browsers are 302'd to {PREFIX}/login (which
+# Apache guards with WebDAV Basic auth and which mints a token) and non-HTML
+# clients get 401. Tokens are the shared gdata_oauth store, minted short-lived.
+AUTH_REQUIRED  = os.environ.get("NOTES_WEB_AUTH", "").strip().lower() in ("1", "true", "yes", "on")
+SESSION_COOKIE = os.environ.get("NOTES_WEB_SESSION_COOKIE", "notes_session")
+SESSION_TTL    = int(os.environ.get("NOTES_WEB_SESSION_TTL", "3600"))  # 1 hour default
+SESSION_HOME   = os.environ.get("NOTES_WEB_HOME", "CONTENTS")          # post-login default note
 
 _CSS = """\
 * { box-sizing: border-box; }
@@ -150,7 +170,7 @@ def _md_inline(text: str) -> str:
 def _href(target: str) -> str:
     if target.startswith('http://') or target.startswith('https://'):
         return target
-    return f'/notes/{target}'
+    return f'{PREFIX}/{target}'
 
 
 # Dict-form inline span types → HTML tag. Mirrors the desktop browser's
@@ -441,10 +461,10 @@ def _nav_html(key: str) -> str:
         return '<nav><b>Notes</b></nav>'
     trailing = key.endswith('/')
     parts = key.rstrip('/').split('/')
-    crumbs = ['<a href="/notes/">Notes</a>']
+    crumbs = [f'<a href="{PREFIX}/">Notes</a>']
     for i, part in enumerate(parts[:-1]):
         ancestor = '/'.join(parts[:i + 1])
-        crumbs.append(f'<a href="/notes/{ancestor}">{_html.escape(part)}</a>')
+        crumbs.append(f'<a href="{PREFIX}/{ancestor}">{_html.escape(part)}</a>')
     last = parts[-1] + ('/' if trailing else '')
     crumbs.append(f'<b>{_html.escape(last)}</b>')
     return '<nav>' + ' › '.join(crumbs) + '</nav>'
@@ -506,7 +526,7 @@ def _malformed_page(key: str) -> str:
         f'<p>The stored document for <code>{ek}</code> is not a valid JSONHTL '
         f'object (it may be double-encoded or otherwise corrupted). '
         f'See <code>gdata-server/troubleshooting</code>.</p>'
-        f'<p><a href="/notes/">Notes index</a></p>'
+        f'<p><a href="{PREFIX}/">Notes index</a></p>'
         f'</body></html>'
     )
 
@@ -556,8 +576,51 @@ def _not_found_page(key: str) -> str:
         f'<!DOCTYPE html>\n<html><head><meta charset="utf-8">'
         f'<title>Not found</title></head><body>'
         f'<p>Note not found: <code>{ek}</code></p>'
-        f'<p><a href="/notes/">Notes index</a></p>'
+        f'<p><a href="{PREFIX}/">Notes index</a></p>'
         f'</body></html>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# Auth gate (opt-in via NOTES_WEB_AUTH; tokens shared with gdata_oauth store)
+# ---------------------------------------------------------------------------
+
+def _authed(request: Request) -> bool:
+    """True if the request carries a valid token — Authorization: Bearer for
+    scripts/curl, or the session cookie for browsers. Both validate against the
+    shared gdata_oauth token store."""
+    auth = request.headers.get('authorization', '')
+    if auth.lower().startswith('bearer '):
+        if gdata_oauth.validate_token(auth[7:].strip()):
+            return True
+    cookie = request.cookies.get(SESSION_COOKIE)
+    return bool(cookie) and gdata_oauth.validate_token(cookie)
+
+
+def _safe_next(nxt: str) -> str:
+    """Resolve the post-login redirect target, refusing open redirects: only a
+    local path under our own PREFIX is allowed; anything else falls back to the
+    configured home note."""
+    if nxt:
+        dec = urllib.parse.unquote(nxt)
+        if (dec.startswith(f'{PREFIX}/') and not dec.startswith('//')
+                and '://' not in dec and '\\' not in dec):
+            return dec
+    return f'{PREFIX}/{SESSION_HOME}'
+
+
+def _auth_challenge(request: Request, key: str):
+    """No valid token: send browsers to the Basic-auth login, others a 401."""
+    if negotiate_format(request.headers.get('accept')) == 'html':
+        nxt = f'{PREFIX}/{key}' if key else f'{PREFIX}/'
+        return RedirectResponse(
+            f'{PREFIX}/login?next={urllib.parse.quote(nxt, safe="")}',
+            status_code=302,
+        )
+    return Response(
+        content='Unauthorized\n', status_code=401,
+        media_type='text/plain; charset=utf-8',
+        headers={'WWW-Authenticate': f'Bearer realm="{PREFIX.strip("/")}"'},
     )
 
 
@@ -668,15 +731,41 @@ def make_router(api_base: str) -> APIRouter:
             r.raise_for_status()
             return r.json()
 
-    @router.get('/notes/', response_class=HTMLResponse)
+    @router.get(f'{PREFIX}/', response_class=HTMLResponse)
     async def notes_index(request: Request):
+        if AUTH_REQUIRED and not _authed(request):
+            return _auth_challenge(request, '')
         doc = await _fetch('')
         if doc is None:
-            return RedirectResponse('/notes/README')
+            return RedirectResponse(f'{PREFIX}/README')
         return _serve_note('', doc, request.headers.get('accept'))
 
-    @router.get('/notes/{key:path}', response_class=HTMLResponse)
+    if AUTH_REQUIRED:
+        @router.get(f'{PREFIX}/login')
+        async def login(request: Request, next: str = ''):
+            # Apache enforces WebDAV Basic auth in front of this path, so merely
+            # reaching this handler means the credentials were accepted. Mint a
+            # short-lived token in the shared gdata_oauth store and hand it back
+            # as an HttpOnly session cookie; the token never appears in a URL.
+            token = gdata_oauth.issue_token(ttl=SESSION_TTL)
+            resp = RedirectResponse(_safe_next(next), status_code=302)
+            resp.set_cookie(SESSION_COOKIE, token, max_age=SESSION_TTL,
+                            httponly=True, secure=True, samesite='lax', path=PREFIX)
+            return resp
+
+        @router.get(f'{PREFIX}/logout')
+        async def logout(request: Request):
+            cookie = request.cookies.get(SESSION_COOKIE)
+            if cookie:
+                gdata_oauth.revoke_token(cookie)
+            resp = RedirectResponse(f'{PREFIX}/login', status_code=302)
+            resp.delete_cookie(SESSION_COOKIE, path=PREFIX)
+            return resp
+
+    @router.get(f'{PREFIX}/{{key:path}}', response_class=HTMLResponse)
     async def notes_view(key: str, request: Request):
+        if AUTH_REQUIRED and not _authed(request):
+            return _auth_challenge(request, key)
         doc = await _fetch(key)
         if doc is None:
             return HTMLResponse(_not_found_page(key), status_code=404)

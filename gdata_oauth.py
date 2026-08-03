@@ -153,9 +153,9 @@ class _TokenStore:
             self._save()
         return entry  # None if not found / expired
 
-    def save_token(self, token: str):
+    def save_token(self, token: str, ttl: Optional[int] = None):
         self._clean()
-        self._data["tokens"][token] = {"exp": time.time() + TOKEN_TTL}
+        self._data["tokens"][token] = {"exp": time.time() + (ttl or TOKEN_TTL)}
         self._save()
 
     def save_client(self, client_id: str, client_secret: str, auth_method: str):
@@ -192,6 +192,22 @@ def validate_token(token: Optional[str]) -> bool:
     if not token:
         return False
     return _get_store().is_valid(token)
+
+
+def issue_token(ttl: Optional[int] = None) -> str:
+    """Mint and persist a new opaque bearer token in the shared store.
+
+    ttl is the lifetime in seconds; None uses the default TOKEN_TTL (30 days).
+    Reused by the notes_web session-cookie login, which passes a short ttl so a
+    browser cookie is not a month-long credential."""
+    token = secrets.token_urlsafe(32)
+    _get_store().save_token(token, ttl=ttl)
+    return token
+
+
+def revoke_token(token: Optional[str]) -> None:
+    if token:
+        _get_store().revoke(token)
 
 
 # ---------------------------------------------------------------------------
