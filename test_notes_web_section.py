@@ -68,3 +68,47 @@ def test_section_content_can_hold_links_and_tables():
 def test_render_content_threads_level_to_top_level_sections():
     html = w._render_content([{"section": {"title": "Top", "content": [{"para": ["x"]}]}}])
     assert "<h2>Top</h2>" in html
+
+
+# --- edge cases -----------------------------------------------------------
+
+def test_empty_section_renders_heading_only_balanced():
+    html = w._render_block({"section": {"title": "Empty", "content": []}})
+    assert "<h2>Empty</h2>" in html
+    assert html.count("<section>") == 1 and html.count("</section>") == 1
+
+
+def test_section_missing_or_empty_title_emits_no_heading():
+    assert "<h" not in w._render_block({"section": {"content": [{"para": ["x"]}]}})
+    assert "<h" not in w._render_block({"section": {"title": "", "content": [{"para": ["x"]}]}})
+    assert "<p>x</p>" in w._render_block({"section": {"content": [{"para": ["x"]}]}})
+
+
+def test_non_dict_section_is_graceful():
+    assert w._render_block({"section": "oops"}) == ""
+    assert w._render_block({"section": None}) == ""
+
+
+def test_section_level_out_of_range_is_clamped():
+    assert "<h6>" in w._render_block({"section": {"title": "T", "level": 9, "content": []}})
+    assert "<h1>" in w._render_block({"section": {"title": "T", "level": 0, "content": []}})
+    assert "<h1>" in w._render_block({"section": {"title": "T", "level": -3, "content": []}})
+    # non-int level falls back to the depth default (2)
+    assert "<h2>" in w._render_block({"section": {"title": "T", "level": "x", "content": []}})
+
+
+def test_section_wrapper_balanced_when_nested():
+    html = w._render_block({"section": {"title": "A", "content": [
+        {"section": {"title": "B", "content": [
+            {"section": {"title": "C", "content": []}}]}}]}})
+    assert html.count("<section>") == 3 == html.count("</section>")
+
+
+def test_mixed_legacy_heading_and_section_in_one_doc():
+    html = w._render_content([
+        {"heading": {"level": 2, "text": "Legacy"}},
+        {"para": ["flat"]},
+        {"section": {"title": "New", "content": [{"para": ["nested"]}]}},
+    ])
+    assert "<h2>Legacy</h2>" in html and "<p>flat</p>" in html
+    assert "<h2>New</h2>" in html and "<p>nested</p>" in html

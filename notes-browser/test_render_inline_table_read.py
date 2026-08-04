@@ -349,6 +349,26 @@ def test_section_explicit_level_and_escape(renderer):
     assert "<h4>a&lt;b&gt;</h4>" in html
 
 
+def test_section_edge_cases(renderer):
+    # empty section: heading only, no crash
+    assert "<h2>Empty</h2>" in renderer._render_section({"title": "Empty", "content": []})
+    # missing/empty title: no heading tag
+    assert "<h" not in renderer._render_section({"content": [{"para": ["x"]}]})
+    # non-dict section: graceful
+    assert renderer._render_section("oops") == ""
+    # level clamp
+    assert "<h6>" in renderer._render_section({"title": "T", "level": 9, "content": []})
+    assert "<h1>" in renderer._render_section({"title": "T", "level": 0, "content": []})
+
+
+def test_mixed_legacy_heading_and_section(renderer):
+    html = renderer._render_jsonhtl_blocks([
+        {"heading": {"level": 2, "text": "Legacy"}},
+        {"section": {"title": "New", "content": [{"para": ["nested"]}]}},
+    ])
+    assert "<h2>Legacy</h2>" in html and "<h2>New</h2>" in html and "nested" in html
+
+
 def test_block_text_extracts_section_title_and_content():
     # _block_text uses self._inline_text/self._block_text but no frame state, so
     # bind the two methods to a plain stub rather than build a wx.Frame.

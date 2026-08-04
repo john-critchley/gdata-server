@@ -90,11 +90,23 @@ def _caption_lines(caption: object) -> list[str]:
     return ["", f"*{inline_text(caption)}*"]
 
 
-def render_block(block: object) -> list[str]:
+def render_block(block: object, level: int = 2) -> list[str]:
     if isinstance(block, str):
         return [block, ""]
     if not isinstance(block, dict):
         return [f"```json\n{json.dumps(block, indent=2, ensure_ascii=False)}\n```", ""]
+
+    if "section" in block and isinstance(block["section"], dict):
+        sec = block["section"]
+        lvl = sec.get("level")
+        if not isinstance(lvl, int):
+            lvl = level
+        lvl = min(max(lvl, 1), 6)
+        title = inline_text(sec.get("title", "") or "")
+        lines = [f"{'#' * lvl} {title}", ""] if title else []
+        for nested in sec.get("content", []) or []:
+            lines.extend(render_block(nested, min(lvl + 1, 6)))
+        return lines
 
     if "heading" in block and isinstance(block["heading"], dict):
         heading = block["heading"]
