@@ -341,11 +341,14 @@ class NotesHTMLRenderer:
         html.append('</body></html>')
         return '\n'.join(html)
     
-    def _render_jsonhtl_blocks(self, blocks, skip_h1=False):
+    def _render_jsonhtl_blocks(self, blocks, skip_h1=False, level=2):
         """Render a list of JSONHTL block elements."""
         html = []
         for idx, block in enumerate(blocks):
             if isinstance(block, dict):
+                if 'section' in block:
+                    html.append(self._render_section(block['section'], level))
+                    continue
                 if 'heading' in block:
                     if skip_h1 and isinstance(block['heading'], dict) and block['heading'].get('level') == 1:
                         continue
@@ -371,6 +374,22 @@ class NotesHTMLRenderer:
                 html.append(f'<p>{self._escape(block)}</p>')
         return '\n'.join(html)
     
+    def _render_section(self, sec, level=2):
+        """Render a nested section container (JSONHTL 'section' block): title as a
+        heading whose level follows nesting depth (overridable via sec['level']),
+        then content recursively one level deeper. No <section> wrapper —
+        wx.html.HtmlWindow ignores unknown tags. See proposals/section-editing."""
+        if not isinstance(sec, dict):
+            return ''
+        lvl = sec.get('level')
+        if not isinstance(lvl, int):
+            lvl = level
+        lvl = min(max(lvl, 1), 6)
+        title = self._escape(str(sec.get('title', '')))
+        head = f'<h{lvl}>{title}</h{lvl}>' if title else ''
+        inner = self._render_jsonhtl_blocks(sec.get('content', []) or [], level=min(lvl + 1, 6))
+        return f'{head}\n{inner}'
+
     def _render_heading(self, heading, block_index=None):
         """Render a JSONHTL heading block."""
         if isinstance(heading, dict):
@@ -1489,6 +1508,17 @@ class NotesBrowser(wx.Frame):
             return block
         if not isinstance(block, dict):
             return ''
+
+        if 'section' in block:
+            sec = block['section']
+            if not isinstance(sec, dict):
+                return str(sec)
+            parts = []
+            if sec.get('title'):
+                parts.append(str(sec['title']))
+            for b in sec.get('content', []) or []:
+                parts.append(self._block_text(b))
+            return '\n'.join(p for p in parts if p)
 
         if 'heading' in block:
             heading = block['heading']

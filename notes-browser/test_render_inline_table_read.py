@@ -325,6 +325,45 @@ def test_table_mixed_string_and_inline_cells_in_row(renderer):
 
 
 # ---------------------------------------------------------------------------
+# 5. Nested `section` blocks (Phase 0 rendering)
+# ---------------------------------------------------------------------------
+
+def test_section_renders_heading_and_content(renderer):
+    html = renderer._render_jsonhtl_blocks(
+        [{"section": {"title": "Discussion", "content": [{"para": ["hi"]}]}}])
+    assert "<h2>Discussion</h2>" in html
+    assert "hi" in html
+
+
+def test_section_nested_deepens_level(renderer):
+    html = renderer._render_jsonhtl_blocks([{"section": {"title": "Outer", "content": [
+        {"para": ["a"]},
+        {"section": {"title": "Inner", "content": [{"para": ["b"]}]}},
+    ]}}])
+    assert "<h2>Outer</h2>" in html and "<h3>Inner</h3>" in html
+    assert html.index("<h2>Outer</h2>") < html.index("<h3>Inner</h3>")
+
+
+def test_section_explicit_level_and_escape(renderer):
+    html = renderer._render_section({"title": "a<b>", "level": 4, "content": []})
+    assert "<h4>a&lt;b&gt;</h4>" in html
+
+
+def test_block_text_extracts_section_title_and_content():
+    # _block_text uses self._inline_text/self._block_text but no frame state, so
+    # bind the two methods to a plain stub rather than build a wx.Frame.
+    class _S:
+        pass
+    s = _S()
+    s._inline_text = nb.NotesBrowser._inline_text.__get__(s)
+    s._block_text = nb.NotesBrowser._block_text.__get__(s)
+    txt = s._block_text({"section": {"title": "T", "content": [
+        {"para": ["hello"]}, {"section": {"title": "Sub", "content": [{"para": ["deep"]}]}},
+    ]}})
+    assert "T" in txt and "hello" in txt and "Sub" in txt and "deep" in txt
+
+
+# ---------------------------------------------------------------------------
 # 4. Metadata value formatting — list/tuple joined, not shown as raw repr
 # ---------------------------------------------------------------------------
 

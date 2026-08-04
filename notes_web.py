@@ -300,9 +300,29 @@ def _render_details(d) -> str:
     return f'<details><summary>{summary}</summary>{nested}</details>'
 
 
-def _render_block(block) -> str:
+def _render_section(sec, level: int = 2) -> str:
+    """Render a nested section container (JSONHTL 'section' block): its title as a
+    heading whose level follows nesting depth (overridable via sec['level']),
+    then its content recursively one level deeper. Wrapped in <section> so it is
+    a real DOM container. See proposals/section-editing."""
+    if not isinstance(sec, dict):
+        return ''
+    lvl = sec.get('level')
+    if not isinstance(lvl, int):
+        lvl = level
+    lvl = max(1, min(6, lvl))
+    title = _html.escape(str(sec.get('title', '')))
+    head = f'<h{lvl}>{title}</h{lvl}>\n' if title else ''
+    inner = _render_content(sec.get('content', []), level=min(lvl + 1, 6))
+    return f'<section>{head}{inner}</section>'
+
+
+def _render_block(block, level: int = 2) -> str:
     if not isinstance(block, dict):
         return ''
+
+    if 'section' in block:
+        return _render_section(block['section'], level)
 
     if 'para' in block:
         return f'<p>{_render_inlines(block["para"])}</p>'
@@ -443,7 +463,7 @@ function submitWritableNote(event, notename) {{
     return html
 
 
-def _render_content(content, skip_h1: bool = False) -> str:
+def _render_content(content, skip_h1: bool = False, level: int = 2) -> str:
     if isinstance(content, str):
         return f'<p>{_md_inline(content)}</p>'
     if isinstance(content, list):
@@ -451,7 +471,7 @@ def _render_content(content, skip_h1: bool = False) -> str:
         for b in content:
             if skip_h1 and isinstance(b, dict) and 'heading' in b and b['heading'].get('level') == 1:
                 continue
-            parts.append(_render_block(b))
+            parts.append(_render_block(b, level))
         return '\n'.join(parts)
     return ''
 
