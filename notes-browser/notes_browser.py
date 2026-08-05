@@ -455,9 +455,15 @@ class NotesHTMLRenderer:
     def _render_codeblock(self, codeblock, block_index=None):
         """Render a JSONHTL codeblock."""
         if isinstance(codeblock, dict):
-            # JSONHTL spec uses 'body' and 'lang'
-            body = codeblock.get('body', codeblock.get('text', ''))
-            lang = codeblock.get('lang', '')
+            # Field precedence mirrors jsonhtl_canon.read_codeblock (the shared
+            # canonical reader) so the desktop view can't diverge from the
+            # web/markdown renderers: lang|language, body|text|content.
+            lang = codeblock.get('lang') or codeblock.get('language', '')
+            body = codeblock.get('body')
+            if body is None:
+                body = codeblock.get('text')
+            if body is None:
+                body = codeblock.get('content', '')
             cls = f' class="language-{self._escape(lang)}"' if lang else ''
             body_html = self._render_text_with_selection(body, block_index)
             return (

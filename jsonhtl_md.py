@@ -16,6 +16,8 @@ from __future__ import annotations
 import base64
 import json
 
+from jsonhtl_canon import read_codeblock
+
 
 def inline_text(value: object) -> str:
     """Render an inline JSONHTL value (string, list, or span dict) to Markdown."""
@@ -118,9 +120,7 @@ def render_block(block: object, level: int = 2) -> list[str]:
         return [inline_text(block["para"]), ""]
 
     if "codeblock" in block and isinstance(block["codeblock"], dict):
-        cb = block["codeblock"]
-        lang = cb.get("lang", cb.get("language", ""))
-        body = cb.get("body", cb.get("content", ""))
+        lang, body = read_codeblock(block["codeblock"])
         return [f"```{lang}", str(body), "```", ""]
 
     if "table" in block and isinstance(block["table"], dict):

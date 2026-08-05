@@ -21,6 +21,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
 
 import gdata_oauth
+from jsonhtl_canon import read_codeblock
 from jsonhtl_md import note_to_markdown
 
 # ---------------------------------------------------------------------------
@@ -333,9 +334,9 @@ def _render_block(block, level: int = 2) -> str:
         return f'<h{lvl}>{_html.escape(h.get("text", ""))}</h{lvl}>'
 
     if 'codeblock' in block:
-        cb = block['codeblock']
-        lang = _html.escape(cb.get('lang', '') or '')
-        body = _html.escape(cb.get('body', ''))
+        lang_raw, body_raw = read_codeblock(block['codeblock'])
+        lang = _html.escape(lang_raw)
+        body = _html.escape(body_raw)
         cls = f' class="language-{lang}"' if lang else ''
         return f'<pre><code{cls}>{body}</code></pre>'
 

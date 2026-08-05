@@ -48,6 +48,7 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gdata
 import gdata_oauth
+import jsonhtl_canon
 import notes_web
 
 logging.basicConfig(
@@ -835,6 +836,15 @@ async def db_put(db_path: str, key: str, value_json: str, if_rev: str | None = N
                 ),
             )
 
+        # Canonicalise field names (e.g. codeblock language/text -> lang/body).
+        # Alias support is kept, but never silent: when anything is rewritten we
+        # store the canonical form (self-healing) and return warnings so the
+        # write can be flagged 203 rather than a silent 200.
+        canon_doc, warnings = jsonhtl_canon.canonicalise_doc(doc)
+        if warnings:
+            value_json = json.dumps(canon_doc, ensure_ascii=False)
+            doc = canon_doc
+
         db[key] = value_json
 
         content = doc.get('content', []) if isinstance(doc, dict) else []
@@ -846,7 +856,7 @@ async def db_put(db_path: str, key: str, value_json: str, if_rev: str | None = N
             'block_ids': [_new_block_id() for _ in content],
         }
         _save_sidecar(db, key, new_sidecar)
-        return new_sidecar
+        return new_sidecar, warnings
 
 
 async def db_delete(db_path: str, key: str) -> bool:
@@ -976,6 +986,20 @@ async def db_patch(db_path: str, key: str, body: dict) -> dict:
         return result
 
 
+def _warning_headers(warnings: list[str]) -> dict:
+    """Build headers announcing a non-canonical (203) document.
+
+    ``Warning: 299`` is the RFC 7234 "miscellaneous persistent warning" code,
+    designed to survive proxy caches; ``X-GData-Warnings`` carries the same list
+    as JSON for machine consumers.
+    """
+    joined = "; ".join(warnings)
+    return {
+        "Warning": f'299 - "non-canonical document normalised: {joined}"',
+        "X-GData-Warnings": json.dumps(warnings),
+    }
+
+
 # ---------------------------------------------------------------------------
 # REST app (FastAPI) — same interface as gdata_server.py
 # ---------------------------------------------------------------------------
@@ -1010,18 +1034,37 @@ def make_rest_app(db_path: str, rest_port: int = 8020, store_name: str = "defaul
         raw, found = await db_get(db_path, key)
         if not found:
             raise fastapi.HTTPException(status_code=404, detail=f"key not found: {key}")
-        return Response(content=raw, media_type="application/json")
+        # Serve canonical, but flag non-canonical storage on every read (203 +
+        # Warning) so the debt is visible until a sweep rewrites it. Returning
+        # the canonical body makes read->write self-healing.
+        try:
+            doc = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return Response(content=raw, media_type="application/json")
+        canon_doc, warnings = jsonhtl_canon.canonicalise_doc(doc)
+        if not warnings:
+            return Response(content=raw, media_type="application/json")
+        return Response(
+            content=json.dumps(canon_doc, ensure_ascii=False),
+            media_type="application/json",
+            status_code=203,
+            headers=_warning_headers(warnings),
+        )
 
     @app.put("/{path:path}")
     async def put_item(path: str, request: fastapi.Request):
         key = _key(path)
         body = (await request.body()).decode('utf-8')
-        sidecar = await db_put(db_path, key, body)
-        return {
-            'status': 'ok',
+        sidecar, warnings = await db_put(db_path, key, body)
+        payload = {
+            'status': 'normalised' if warnings else 'ok',
             'rev': sidecar['rev'],
             'block_ids': sidecar['block_ids'],
         }
+        if warnings:
+            payload['warnings'] = warnings
+            return JSONResponse(payload, status_code=203, headers=_warning_headers(warnings))
+        return payload
 
     @app.delete("/{path:path}")
     async def delete_item(path: str):
@@ -1316,6 +1359,12 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
                             result = json.loads(raw)
                         except json.JSONDecodeError:
                             result = raw
+                        else:
+                            # MCP has no HTTP status; surface non-canonical
+                            # warnings in-band and hand back canonical content.
+                            canon, warnings = jsonhtl_canon.canonicalise_doc(result)
+                            if warnings and isinstance(canon, dict):
+                                result = {**canon, "_warnings": warnings}
             elif name == "put":
                 key = arguments["key"]
                 value = arguments["value"]
@@ -1326,12 +1375,14 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
                         pass
                 if_rev = arguments.get("if_rev") or None
                 try:
-                    sidecar = await db_put(db_path, key, json.dumps(value), if_rev=if_rev)
+                    sidecar, warnings = await db_put(db_path, key, json.dumps(value), if_rev=if_rev)
                     result = {
-                        "status": "ok",
+                        "status": "normalised" if warnings else "ok",
                         "rev": sidecar["rev"],
                         "block_ids": sidecar["block_ids"],
                     }
+                    if warnings:
+                        result["warnings"] = warnings
                 except fastapi.HTTPException as e:
                     result = _mcp_error(e.detail, e.status_code)
             elif name == "delete":
