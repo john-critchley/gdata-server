@@ -27,7 +27,8 @@ def _req(method, url, data=None):
                                  headers={"content-type": "application/json"})
     # keep 203 out of the "error" path (urllib treats <400 as success anyway)
     resp = urllib.request.urlopen(req)
-    return resp.status, resp.read(), dict(resp.headers)
+    # resp.headers is an http.client.HTTPMessage: case-insensitive .get().
+    return resp.status, resp.read(), resp.headers
 
 
 def main():
