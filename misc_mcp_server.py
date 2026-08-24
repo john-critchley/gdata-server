@@ -29,6 +29,11 @@ import logging
 import os
 import re
 import sys
+import smtplib
+from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
+from email.parser import BytesParser
+from email import policy
 
 import asyncpg
 import fastapi
@@ -42,7 +47,16 @@ from starlette.requests import Request
 from starlette.routing import Mount, Route
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'envoy'))
+
 import gdata_oauth
+
+# Import IMAP client from envoy
+try:
+    from imap_client import IMAPClient
+except ImportError:
+    logger = logging.getLogger(__name__)
+    logger.warning("Could not import IMAPClient from envoy - email tools will not be available")
 
 logging.basicConfig(
     level=os.getenv('LOG_LEVEL', 'INFO'),
@@ -80,6 +94,148 @@ def _serialise_value(v):
 
 def _row_to_dict(record: asyncpg.Record) -> dict:
     return {k: _serialise_value(v) for k, v in dict(record).items()}
+
+
+async def _email_send(to: str, subject: str, body: str, headers: dict = None) -> str:
+    """Send an email to the local mail server (Brevo SMTP)."""
+    try:
+        msg = EmailMessage()
+        msg['From'] = 'envoy@critchley.biz'
+        msg['To'] = to
+        msg['Subject'] = subject
+        msg['Date'] = formatdate(localtime=True)
+        msg['Message-ID'] = make_msgid(domain='critchley.biz')
+
+        # Add custom headers if provided
+        if headers and isinstance(headers, dict):
+            for key, value in headers.items():
+                if key not in ('From', 'To', 'Subject', 'Date', 'Message-ID'):
+                    msg[key] = str(value)
+
+        msg.set_content(body)
+
+        # Send via SMTP
+        with smtplib.SMTP('smtp-relay.brevo.com', 587) as server:
+            server.starttls()
+            server.login('7d832001@smtp-brevo.com', os.getenv('BREVO_SMTP_PASSWORD', ''))
+            server.send_message(msg)
+
+        return json.dumps({
+            'status': 'sent',
+            'to': to,
+            'subject': subject,
+            'message_id': msg['Message-ID']
+        })
+    except Exception as e:
+        logger.error(f"Failed to send email: {e}")
+        return json.dumps({'status': 'error', 'error': str(e)})
+
+
+async def _email_list(folder: str = 'INBOX', search_criteria: str = 'ALL', max_results: int = 10) -> str:
+    """List emails in a mailbox folder."""
+    try:
+        with IMAPClient('mail.critchley.biz') as client:
+            client.select_folder(folder)
+            email_ids = client.search(search_criteria)
+
+            emails = []
+            for seq_id in email_ids[-max_results:]:
+                try:
+                    status, data = client.connection.fetch(seq_id, '(FLAGS RFC822.HEADER)')
+                    if status == 'OK' and data:
+                        flags_str = data[0][0].decode('utf-8', errors='replace')
+                        header_bytes = data[0][1]
+
+                        # Parse headers
+                        parser = BytesParser(policy=policy.default)
+                        msg = parser.parsebytes(header_bytes)
+
+                        emails.append({
+                            'seq': str(seq_id),
+                            'from': msg.get('From', ''),
+                            'to': msg.get('To', ''),
+                            'subject': msg.get('Subject', ''),
+                            'date': msg.get('Date', ''),
+                            'message_id': msg.get('Message-ID', ''),
+                            'flags': flags_str
+                        })
+                except Exception as e:
+                    logger.warning(f"Error parsing email {seq_id}: {e}")
+
+            return json.dumps({
+                'folder': folder,
+                'count': len(emails),
+                'emails': emails
+            })
+    except Exception as e:
+        logger.error(f"Failed to list emails: {e}")
+        return json.dumps({'status': 'error', 'error': str(e)})
+
+
+async def _email_read(folder: str = 'INBOX', seq_id: str = None) -> str:
+    """Read full email including body from mailbox."""
+    try:
+        with IMAPClient('mail.critchley.biz') as client:
+            client.select_folder(folder)
+
+            if not seq_id:
+                return json.dumps({'status': 'error', 'error': 'seq_id required'})
+
+            status, data = client.connection.fetch(seq_id, '(FLAGS RFC822)')
+            if status != 'OK' or not data:
+                return json.dumps({'status': 'error', 'error': f'Email {seq_id} not found'})
+
+            flags_str = data[0][0].decode('utf-8', errors='replace')
+            email_bytes = data[0][1]
+
+            # Parse full email
+            parser = BytesParser(policy=policy.default)
+            msg = parser.parsebytes(email_bytes)
+
+            # Extract headers as dict
+            headers = {key: msg[key] for key in msg.keys()}
+
+            # Extract body
+            body = ''
+            if msg.is_multipart():
+                for part in msg.iter_parts():
+                    if part.get_content_type() == 'text/plain':
+                        payload = part.get_payload(decode=True)
+                        if payload:
+                            body = payload.decode('utf-8', errors='replace')
+                        break
+            else:
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    body = payload.decode('utf-8', errors='replace')
+                else:
+                    body = msg.get_payload()
+
+            return json.dumps({
+                'seq': seq_id,
+                'folder': folder,
+                'headers': headers,
+                'body': body,
+                'flags': flags_str
+            })
+    except Exception as e:
+        logger.error(f"Failed to read email: {e}")
+        return json.dumps({'status': 'error', 'error': str(e)})
+
+
+async def _email_list_folders() -> str:
+    """List all mailbox folders."""
+    try:
+        with IMAPClient('mail.critchley.biz') as client:
+            folders = client.list_folders()
+            return json.dumps({
+                'status': 'success',
+                'folders': folders,
+                'count': len(folders)
+            })
+    except Exception as e:
+        logger.error(f"Failed to list folders: {e}")
+        return json.dumps({'status': 'error', 'error': str(e)})
 
 
 async def _pg_query(sql: str) -> str:
@@ -161,6 +317,77 @@ def _make_tool_server(store_name: str = 'misc') -> Server:
                     'required': ['sql'],
                 },
             ),
+            types.Tool(
+                name='email_send',
+                description='Send an email to the local mail server.',
+                inputSchema={
+                    'type': 'object',
+                    'properties': {
+                        'to': {
+                            'type': 'string',
+                            'description': 'Email recipient address',
+                        },
+                        'subject': {
+                            'type': 'string',
+                            'description': 'Email subject line',
+                        },
+                        'body': {
+                            'type': 'string',
+                            'description': 'Email body text',
+                        },
+                        'headers': {
+                            'type': 'object',
+                            'description': 'Optional additional email headers (dict). Do not include From, To, Subject, Date, Message-ID.',
+                        },
+                    },
+                    'required': ['to', 'subject', 'body'],
+                },
+            ),
+            types.Tool(
+                name='email_list',
+                description='List emails in a mailbox folder with headers.',
+                inputSchema={
+                    'type': 'object',
+                    'properties': {
+                        'folder': {
+                            'type': 'string',
+                            'description': 'Mailbox folder name (default: INBOX)',
+                        },
+                        'search_criteria': {
+                            'type': 'string',
+                            'description': 'IMAP search criteria (default: ALL). E.g., UNSEEN, SEEN, FROM "address", SUBJECT "text"',
+                        },
+                        'max_results': {
+                            'type': 'integer',
+                            'description': 'Maximum number of results to return (default: 10)',
+                        },
+                    },
+                    'required': [],
+                },
+            ),
+            types.Tool(
+                name='email_read',
+                description='Read a full email including body and all headers from mailbox.',
+                inputSchema={
+                    'type': 'object',
+                    'properties': {
+                        'folder': {
+                            'type': 'string',
+                            'description': 'Mailbox folder name (default: INBOX)',
+                        },
+                        'seq_id': {
+                            'type': 'string',
+                            'description': 'Email sequence ID (returned from email_list)',
+                        },
+                    },
+                    'required': ['seq_id'],
+                },
+            ),
+            types.Tool(
+                name='email_list_folders',
+                description='List all mailbox folders available on the server.',
+                inputSchema={'type': 'object', 'properties': {}, 'required': []},
+            ),
         ]
         prefix = f'[{store_name} store] '
         for t in tools:
@@ -176,6 +403,31 @@ def _make_tool_server(store_name: str = 'misc') -> Server:
             if not sql:
                 return [types.TextContent(type='text', text='sql argument is required.')]
             result = await _pg_query(sql)
+            return [types.TextContent(type='text', text=result)]
+        if name == 'email_send':
+            to = arguments.get('to', '').strip()
+            subject = arguments.get('subject', '').strip()
+            body = arguments.get('body', '').strip()
+            headers = arguments.get('headers')
+            if not to or not subject:
+                return [types.TextContent(type='text', text='to and subject arguments are required.')]
+            result = await _email_send(to, subject, body, headers)
+            return [types.TextContent(type='text', text=result)]
+        if name == 'email_list':
+            folder = arguments.get('folder', 'INBOX').strip()
+            search_criteria = arguments.get('search_criteria', 'ALL').strip()
+            max_results = int(arguments.get('max_results', 10))
+            result = await _email_list(folder, search_criteria, max_results)
+            return [types.TextContent(type='text', text=result)]
+        if name == 'email_read':
+            folder = arguments.get('folder', 'INBOX').strip()
+            seq_id = arguments.get('seq_id', '').strip()
+            if not seq_id:
+                return [types.TextContent(type='text', text='seq_id argument is required.')]
+            result = await _email_read(folder, seq_id)
+            return [types.TextContent(type='text', text=result)]
+        if name == 'email_list_folders':
+            result = await _email_list_folders()
             return [types.TextContent(type='text', text=result)]
         return [types.TextContent(type='text', text=f'unknown tool: {name}')]
 
