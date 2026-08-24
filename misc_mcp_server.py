@@ -319,7 +319,7 @@ def _make_tool_server(store_name: str = 'misc') -> Server:
             ),
             types.Tool(
                 name='email_send',
-                description='Send an email to the local mail server.',
+                description='Send an email to the local mail server. For full documentation and testing workflows, see notes key: misc-server/email-tools',
                 inputSchema={
                     'type': 'object',
                     'properties': {
@@ -345,7 +345,7 @@ def _make_tool_server(store_name: str = 'misc') -> Server:
             ),
             types.Tool(
                 name='email_list',
-                description='List emails in a mailbox folder with headers.',
+                description='List emails in a mailbox folder with headers. See misc-server/email-tools for examples and IMAP search syntax.',
                 inputSchema={
                     'type': 'object',
                     'properties': {
@@ -367,7 +367,7 @@ def _make_tool_server(store_name: str = 'misc') -> Server:
             ),
             types.Tool(
                 name='email_read',
-                description='Read a full email including body and all headers from mailbox.',
+                description='Read a full email including body and all headers from mailbox. See notes key misc-server/email-tools for workflow examples.',
                 inputSchema={
                     'type': 'object',
                     'properties': {
@@ -385,7 +385,7 @@ def _make_tool_server(store_name: str = 'misc') -> Server:
             ),
             types.Tool(
                 name='email_list_folders',
-                description='List all mailbox folders available on the server.',
+                description='List all mailbox folders available on the server. Documentation: misc-server/email-tools',
                 inputSchema={'type': 'object', 'properties': {}, 'required': []},
             ),
         ]
