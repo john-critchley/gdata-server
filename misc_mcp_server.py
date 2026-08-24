@@ -104,6 +104,215 @@ async def _pg_query(sql: str) -> str:
         return f'Query error: {exc}. Please try again.'
 
 
+# ---------------------------------------------------------------------------
+# Monitoring / health checks (the `check` tool)
+#
+# Two kinds of check behind one interface:
+#   - SQL checks reuse the asyncpg pool (everything reachable as owntracks_ro).
+#   - Host checks (disk) use os.statvfs — the metrics SQL cannot see, notably
+#     filesystem free space, which is what actually triggered the low-disk
+#     incident. SQL cannot even reveal the data_directory to a non-superuser,
+#     which is exactly why disk monitoring lives out here.
+#
+# Each check returns a dict with status: ok | warn | crit | info.
+# check('all') rolls them up with an overall_status so a cron can alert on
+# status != ok using the identical code path.
+#
+# Notes (public store): location-db/monitoring
+# ---------------------------------------------------------------------------
+
+# Filesystem paths to watch. Postgres data dir is /mnt/postgres/15/main, so the
+# DB lives on /mnt; / is the OS/root volume. Override with MONITOR_DISK_PATHS
+# (comma-separated).
+_DISK_PATHS = [p for p in os.getenv('MONITOR_DISK_PATHS', '/,/mnt').split(',') if p]
+_DISK_WARN_PCT = float(os.getenv('MONITOR_DISK_WARN_PCT', '20'))
+_DISK_CRIT_PCT = float(os.getenv('MONITOR_DISK_CRIT_PCT', '10'))
+
+_STATUS_RANK = {'ok': 0, 'info': 0, 'warn': 1, 'crit': 2}
+
+
+def _worst(statuses) -> str:
+    return max(statuses, key=lambda s: _STATUS_RANK.get(s, 0), default='ok')
+
+
+async def _fetchrows(sql: str) -> list[dict]:
+    """Run a SELECT via the pool and return rows as dicts (raises on error)."""
+    if _pool is None:
+        raise RuntimeError('Database pool not available.')
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(sql, timeout=30)
+    return [_row_to_dict(r) for r in rows]
+
+
+async def _check_disk() -> dict:
+    filesystems = []
+    statuses = []
+    for path in _DISK_PATHS:
+        try:
+            st = os.statvfs(path)
+        except OSError as exc:
+            filesystems.append({'path': path, 'error': str(exc)})
+            statuses.append('warn')
+            continue
+        total = st.f_blocks * st.f_frsize
+        free = st.f_bavail * st.f_frsize
+        free_pct = round(100.0 * free / total, 1) if total else 0.0
+        if free_pct < _DISK_CRIT_PCT:
+            status = 'crit'
+        elif free_pct < _DISK_WARN_PCT:
+            status = 'warn'
+        else:
+            status = 'ok'
+        statuses.append(status)
+        filesystems.append({
+            'path': path,
+            'total_gb': round(total / 1e9, 2),
+            'used_gb': round((total - free) / 1e9, 2),
+            'free_gb': round(free / 1e9, 2),
+            'free_pct': free_pct,
+            'status': status,
+        })
+    return {
+        'status': _worst(statuses),
+        'thresholds_pct': {'warn': _DISK_WARN_PCT, 'crit': _DISK_CRIT_PCT},
+        'filesystems': filesystems,
+    }
+
+
+async def _check_db_size() -> dict:
+    rows = await _fetchrows(
+        "SELECT datname AS database, pg_database_size(datname) AS bytes, "
+        "pg_size_pretty(pg_database_size(datname)) AS size "
+        "FROM pg_database WHERE datistemplate=false ORDER BY 2 DESC")
+    return {'status': 'info', 'databases': rows}
+
+
+async def _check_connections() -> dict:
+    row = (await _fetchrows(
+        "SELECT current_setting('max_connections')::int AS max_connections, "
+        "(SELECT count(*) FROM pg_stat_activity) AS current, "
+        "round(100.0*(SELECT count(*) FROM pg_stat_activity)"
+        "/current_setting('max_connections')::int,1) AS pct"))[0]
+    pct = float(row['pct'])
+    status = 'crit' if pct >= 90 else 'warn' if pct >= 80 else 'ok'
+    return {'status': status, **row}
+
+
+async def _check_long_queries() -> dict:
+    rows = await _fetchrows(
+        "SELECT pid, usename, state, "
+        "extract(epoch FROM now()-query_start)::int AS running_secs, "
+        "left(regexp_replace(query,'\\s+',' ','g'),120) AS query "
+        "FROM pg_stat_activity "
+        "WHERE state='active' AND now()-query_start > interval '30 seconds' "
+        "AND pid<>pg_backend_pid() ORDER BY 4 DESC")
+    if not rows:
+        return {'status': 'ok', 'long_running': []}
+    worst = max(r['running_secs'] for r in rows)
+    status = 'crit' if worst >= 300 else 'warn'
+    return {'status': status, 'long_running': rows}
+
+
+async def _check_bloat() -> dict:
+    rows = await _fetchrows(
+        "SELECT relname AS \"table\", n_live_tup AS live, n_dead_tup AS dead, "
+        "round(100.0*n_dead_tup/nullif(n_live_tup+n_dead_tup,0),2) AS dead_pct, "
+        "last_autovacuum "
+        "FROM pg_stat_user_tables WHERE n_live_tup+n_dead_tup>0 "
+        "ORDER BY n_dead_tup DESC LIMIT 10")
+    worst = max((float(r['dead_pct'] or 0) for r in rows), default=0.0)
+    status = 'crit' if worst >= 40 else 'warn' if worst >= 20 else 'ok'
+    return {'status': status, 'tables': rows}
+
+
+async def _check_xid() -> dict:
+    rows = await _fetchrows(
+        "SELECT datname, age(datfrozenxid) AS xid_age, "
+        "round(100.0*age(datfrozenxid)/2000000000,4) AS pct_to_wraparound "
+        "FROM pg_database WHERE datistemplate=false ORDER BY 2 DESC")
+    worst = max((float(r['pct_to_wraparound']) for r in rows), default=0.0)
+    status = 'crit' if worst >= 80 else 'warn' if worst >= 50 else 'ok'
+    return {'status': status, 'databases': rows}
+
+
+async def _check_locks() -> dict:
+    row = (await _fetchrows(
+        "SELECT (SELECT count(*) FROM pg_locks WHERE NOT granted) AS waiting_locks, "
+        "(SELECT count(*) FROM pg_stat_activity WHERE wait_event_type='Lock') "
+        "AS sessions_waiting"))[0]
+    status = 'warn' if (row['waiting_locks'] or 0) > 0 else 'ok'
+    return {'status': status, **row}
+
+
+async def _check_cache() -> dict:
+    row = (await _fetchrows(
+        "SELECT round(100.0*blks_hit/nullif(blks_hit+blks_read,0),2) AS cache_hit_pct, "
+        "deadlocks, temp_files, pg_size_pretty(temp_bytes) AS temp_written "
+        "FROM pg_stat_database WHERE datname=current_database()"))[0]
+    hit = float(row['cache_hit_pct'] or 100)
+    status = 'warn' if hit < 90 else 'ok'
+    return {'status': status, **row}
+
+
+async def _check_freshness() -> dict:
+    # Informational only: OwnTracks may be in Manual mode, so a long gap since
+    # the last fix is not in itself a fault. See location-db/monitoring.
+    row = (await _fetchrows(
+        "SELECT max(to_timestamp(tst)) AS latest_fix_utc, "
+        "extract(epoch FROM now()-max(to_timestamp(tst)))::int AS age_secs, "
+        "count(*) FILTER (WHERE to_timestamp(tst) > now()-interval '24 hours') "
+        "AS fixes_last_24h FROM locations"))[0]
+    return {'status': 'info', **row}
+
+
+async def _check_instance() -> dict:
+    row = (await _fetchrows(
+        "SELECT current_setting('server_version') AS version, "
+        "extract(epoch FROM now()-pg_postmaster_start_time())::int AS uptime_secs, "
+        "pg_is_in_recovery() AS in_recovery, "
+        "(SELECT count(*) FROM pg_stat_replication) AS replica_count"))[0]
+    return {'status': 'info', **row}
+
+
+_CHECKS = {
+    'disk':         _check_disk,
+    'db_size':      _check_db_size,
+    'connections':  _check_connections,
+    'long_queries': _check_long_queries,
+    'bloat':        _check_bloat,
+    'xid':          _check_xid,
+    'locks':        _check_locks,
+    'cache':        _check_cache,
+    'freshness':    _check_freshness,
+    'instance':     _check_instance,
+}
+
+
+async def _run_check(target: str) -> str:
+    target = (target or 'all').strip().lower()
+    if target in ('all', 'summary'):
+        results = {}
+        for name, fn in _CHECKS.items():
+            try:
+                results[name] = await fn()
+            except Exception as exc:
+                logger.warning('check %s failed: %s', name, exc)
+                results[name] = {'status': 'warn', 'error': str(exc)}
+        overall = _worst([r.get('status', 'ok') for r in results.values()])
+        return json.dumps({'target': 'all', 'overall_status': overall,
+                           'checks': results}, default=str)
+    fn = _CHECKS.get(target)
+    if fn is None:
+        return json.dumps({'error': f'unknown target: {target}',
+                           'available': sorted(_CHECKS) + ['all']})
+    try:
+        result = await fn()
+    except Exception as exc:
+        logger.warning('check %s failed: %s', target, exc)
+        return json.dumps({'target': target, 'status': 'warn', 'error': str(exc)})
+    return json.dumps({'target': target, **result}, default=str)
+
+
 def make_rest_app(rest_port: int = 8220, store_name: str = 'misc') -> fastapi.FastAPI:
     app = fastapi.FastAPI(redirect_slashes=False)
     app.include_router(gdata_oauth.router)
@@ -161,6 +370,41 @@ def _make_tool_server(store_name: str = 'misc') -> Server:
                     'required': ['sql'],
                 },
             ),
+            types.Tool(
+                name='check',
+                description=(
+                    'Health/monitoring check for the gravlax database host.\n\n'
+                    'Pass a target naming what to inspect; omit or use "all" for a '
+                    'full rollup with an overall_status.\n\n'
+                    'Targets:\n'
+                    '  disk         - filesystem free space (/ and /mnt; host-level, invisible to SQL)\n'
+                    '  db_size      - size of each database\n'
+                    '  connections  - backend count vs max_connections\n'
+                    '  long_queries - active queries running > 30s\n'
+                    '  bloat        - dead-tuple % and last autovacuum per table\n'
+                    '  xid          - transaction-id wraparound headroom\n'
+                    '  locks        - waiting / blocked locks\n'
+                    '  cache        - buffer cache hit ratio, deadlocks, temp usage\n'
+                    '  freshness    - latest OwnTracks fix age (informational; Manual mode may be stale legitimately)\n'
+                    '  instance     - version, uptime, recovery/replication\n'
+                    '  all          - run every check (default)\n\n'
+                    'Each check returns status: ok | warn | crit | info.\n\n'
+                    'Usage notes: location-db/monitoring (public notes store)'
+                ),
+                inputSchema={
+                    'type': 'object',
+                    'properties': {
+                        'target': {
+                            'type': 'string',
+                            'description': 'What to check; omit for "all".',
+                            'enum': ['all', 'disk', 'db_size', 'connections',
+                                     'long_queries', 'bloat', 'xid', 'locks',
+                                     'cache', 'freshness', 'instance'],
+                        },
+                    },
+                    'required': [],
+                },
+            ),
         ]
         prefix = f'[{store_name} store] '
         for t in tools:
@@ -176,6 +420,9 @@ def _make_tool_server(store_name: str = 'misc') -> Server:
             if not sql:
                 return [types.TextContent(type='text', text='sql argument is required.')]
             result = await _pg_query(sql)
+            return [types.TextContent(type='text', text=result)]
+        if name == 'check':
+            result = await _run_check(arguments.get('target') or 'all')
             return [types.TextContent(type='text', text=result)]
         return [types.TextContent(type='text', text=f'unknown tool: {name}')]
 
