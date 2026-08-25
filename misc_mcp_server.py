@@ -47,16 +47,16 @@ from starlette.requests import Request
 from starlette.routing import Mount, Route
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'envoy'))
 
 import gdata_oauth
 
-# Import IMAP client from envoy
+# Import IMAP client (local copy in gdata-server)
 try:
     from imap_client import IMAPClient
-except ImportError:
+except ImportError as e:
+    IMAPClient = None
     logger = logging.getLogger(__name__)
-    logger.warning("Could not import IMAPClient from envoy - email tools will not be available")
+    logger.error(f"Could not import IMAPClient: {e}")
 
 logging.basicConfig(
     level=os.getenv('LOG_LEVEL', 'INFO'),
@@ -97,8 +97,14 @@ def _row_to_dict(record: asyncpg.Record) -> dict:
 
 
 async def _email_send(to: str, subject: str, body: str, headers: dict = None) -> str:
-    """Send an email to the local mail server (Brevo SMTP)."""
+    """Send an email via WebDAV delivery."""
     try:
+        import io
+        import netrc
+        import time
+        import zlib
+        import webdav4.client
+
         msg = EmailMessage()
         msg['From'] = 'envoy@critchley.biz'
         msg['To'] = to
@@ -113,12 +119,21 @@ async def _email_send(to: str, subject: str, body: str, headers: dict = None) ->
                     msg[key] = str(value)
 
         msg.set_content(body)
+        raw_msg = msg.as_bytes()
 
-        # Send via SMTP
-        with smtplib.SMTP('smtp-relay.brevo.com', 587) as server:
-            server.starttls()
-            server.login('7d832001@smtp-brevo.com', os.getenv('BREVO_SMTP_PASSWORD', ''))
-            server.send_message(msg)
+        # Connect to WebDAV and deliver
+        user, _, password = netrc.netrc().authenticators('webdav.critchley.biz')
+        client = webdav4.client.Client('https://webdav.critchley.biz/mail/envoy',
+                                       auth=(user, password))
+
+        # Generate filename: E-<timestamp_us>-<crc>.eml
+        timestamp_us = int(time.time() * 1_000_000)
+        extra = f"{subject}{to}".encode('utf-8')
+        crc = zlib.crc32(extra) & 0xffffffff
+        filename = f"E-{timestamp_us}-{crc:08x}.eml"
+
+        # Upload to new/ directory
+        client.upload_fileobj(io.BytesIO(raw_msg), f'new/{filename}')
 
         return json.dumps({
             'status': 'sent',
@@ -281,7 +296,7 @@ def _make_tool_server(store_name: str = 'misc') -> Server:
         tools = [
             types.Tool(
                 name='hello',
-                description='Say hello. Returns a greeting.',
+                description='Say hello. Returns a greeting. For overview of all misc connector services, see notes key: misc-server',
                 inputSchema={'type': 'object', 'properties': {}, 'required': []},
             ),
             types.Tool(
@@ -484,9 +499,14 @@ async def main():
     parser = argparse.ArgumentParser(description='misc MCP server')
     parser.add_argument('--rest-port', type=int, default=int(os.getenv('MISC_REST_PORT', 8220)))
     parser.add_argument('--mcp-port',  type=int, default=int(os.getenv('MISC_MCP_PORT',  8223)))
-    parser.add_argument('--host',      default=os.getenv('MISC_HOST', '127.0.0.1'))
+    parser.add_argument('--rest-host', default=None)
+    parser.add_argument('--mcp-host',  default=None)
+    parser.add_argument('--host',      default=None, help='(deprecated: use --rest-host and --mcp-host)')
     parser.add_argument('--name',      default=os.getenv('GDATA_STORE_NAME', 'misc'))
     args = parser.parse_args()
+
+    args.rest_host = args.rest_host or os.getenv('REST_HOST', '127.0.0.1')
+    args.mcp_host = args.mcp_host or os.getenv('MCP_HOST', '127.0.0.1')
 
     log_level = os.getenv('LOG_LEVEL', 'info').lower()
 
@@ -504,10 +524,10 @@ async def main():
     rest_app = make_rest_app(args.rest_port, args.name)
     mcp_app  = make_mcp_app(args.name)
 
-    rest_cfg = uvicorn.Config(rest_app, host=args.host, port=args.rest_port, log_level=log_level)
-    mcp_cfg  = uvicorn.Config(mcp_app,  host=args.host, port=args.mcp_port,  log_level=log_level)
+    rest_cfg = uvicorn.Config(rest_app, host=args.rest_host, port=args.rest_port, log_level=log_level)
+    mcp_cfg  = uvicorn.Config(mcp_app,  host=args.mcp_host, port=args.mcp_port,  log_level=log_level)
 
-    logger.info(f'REST on {args.host}:{args.rest_port}  |  MCP on {args.host}:{args.mcp_port}  |  name={args.name}')
+    logger.info(f'REST on {args.rest_host}:{args.rest_port}  |  MCP on {args.mcp_host}:{args.mcp_port}  |  name={args.name}')
 
     try:
         await asyncio.gather(
