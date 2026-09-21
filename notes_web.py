@@ -752,7 +752,7 @@ def make_router(api_base: str) -> APIRouter:
             r.raise_for_status()
             return r.json()
 
-    @router.get(f'{PREFIX}/', response_class=HTMLResponse)
+    @router.api_route(f'{PREFIX}/', methods=['GET', 'HEAD'], response_class=HTMLResponse)
     async def notes_index(request: Request):
         if AUTH_REQUIRED and not _authed(request):
             return _auth_challenge(request, '')
@@ -783,7 +783,7 @@ def make_router(api_base: str) -> APIRouter:
             resp.delete_cookie(SESSION_COOKIE, path=PREFIX)
             return resp
 
-    @router.get(f'{PREFIX}/{{key:path}}', response_class=HTMLResponse)
+    @router.api_route(f'{PREFIX}/{{key:path}}', methods=['GET', 'HEAD'], response_class=HTMLResponse)
     async def notes_view(key: str, request: Request):
         if AUTH_REQUIRED and not _authed(request):
             return _auth_challenge(request, key)
