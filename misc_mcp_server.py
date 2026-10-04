@@ -49,6 +49,7 @@ from starlette.routing import Mount, Route
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import gdata_oauth
+from mcp_tool_plugins import discover_tools
 
 # Import IMAP client (local copy in gdata-server)
 try:
@@ -156,7 +157,7 @@ async def _email_list(folder: str = 'INBOX', search_criteria: str = 'ALL', max_r
             emails = []
             for seq_id in email_ids[-max_results:]:
                 try:
-                    status, data = client.connection.fetch(seq_id, '(FLAGS RFC822.HEADER)')
+                    status, data = client.connection.fetch(seq_id, '(FLAGS BODY.PEEK[HEADER])')
                     if status == 'OK' and data:
                         flags_str = data[0][0].decode('utf-8', errors='replace')
                         header_bytes = data[0][1]
@@ -196,7 +197,7 @@ async def _email_read(folder: str = 'INBOX', seq_id: str = None) -> str:
             if not seq_id:
                 return json.dumps({'status': 'error', 'error': 'seq_id required'})
 
-            status, data = client.connection.fetch(seq_id, '(FLAGS RFC822)')
+            status, data = client.connection.fetch(seq_id, '(FLAGS BODY.PEEK[])')
             if status != 'OK' or not data:
                 return json.dumps({'status': 'error', 'error': f'Email {seq_id} not found'})
 
@@ -404,6 +405,16 @@ def _make_tool_server(store_name: str = 'misc') -> Server:
                 inputSchema={'type': 'object', 'properties': {}, 'required': []},
             ),
         ]
+        plugin_names = {tool.name for tool in tools}
+        for plugin in discover_tools():
+            if plugin.name in plugin_names:
+                logger.warning('Skipping plugin tool that conflicts with built-in: %s', plugin.name)
+                continue
+            tools.append(types.Tool(
+                name=plugin.name,
+                description=plugin.description,
+                inputSchema=plugin.input_schema,
+            ))
         prefix = f'[{store_name} store] '
         for t in tools:
             t.description = prefix + t.description
@@ -444,6 +455,10 @@ def _make_tool_server(store_name: str = 'misc') -> Server:
         if name == 'email_list_folders':
             result = await _email_list_folders()
             return [types.TextContent(type='text', text=result)]
+        for plugin in discover_tools():
+            if plugin.name == name:
+                result = await plugin.invoke(arguments)
+                return [types.TextContent(type='text', text=result)]
         return [types.TextContent(type='text', text=f'unknown tool: {name}')]
 
     return server
