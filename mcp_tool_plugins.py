@@ -90,6 +90,8 @@ def discover_tools(search_paths=None):
         for filename in sorted(os.listdir(directory)):
             if not filename.endswith('.py') or filename.startswith('_'):
                 continue
+            if filename.startswith('test_'):
+                continue
             if os.path.abspath(directory) == server_directory and not filename.endswith('_tools.py'):
                 continue
             path = os.path.join(directory, filename)

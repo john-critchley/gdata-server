@@ -18,6 +18,14 @@ def run(coroutine):
 
 class PluginArchitectureTests(unittest.TestCase):
 
+    def test_ignores_test_modules_even_when_name_ends_in_tools(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, 'test_example_tools.py').write_text(
+                'raise RuntimeError("test module must not be imported")\n',
+                encoding='utf-8',
+            )
+            self.assertEqual([], discover_tools([directory]))
+
     def write_plugin(self, directory, filename, source):
         path = Path(directory, filename)
         path.write_text(source, encoding='utf-8')
