@@ -28,7 +28,10 @@ from email.header import decode_header, make_header
 from email.policy import default as default_policy
 
 import requests
-import socks
+try:
+    import socks
+except ImportError:  # Optional: direct connections do not need PySocks.
+    socks = None
 
 
 DEFAULT_HOST = "outlook.office365.com"
@@ -76,6 +79,8 @@ class SocksIMAP4SSL(imaplib.IMAP4_SSL):
     """IMAP4_SSL connection whose TCP socket is opened through SOCKS5."""
 
     def __init__(self, host, port, proxy, timeout=30):
+        if socks is None:
+            raise RuntimeError("SOCKS proxy requested but PySocks is not installed")
         parsed = urlparse(proxy)
         if parsed.scheme not in {"socks5", "socks5h"} or not parsed.hostname:
             raise ValueError("proxy must be a socks5:// or socks5h:// URL")
