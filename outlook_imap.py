@@ -24,6 +24,7 @@ import re
 import ssl
 import sys
 from datetime import date
+from html.parser import HTMLParser
 from urllib.parse import urlparse
 from email.header import decode_header, make_header
 from email.policy import default as default_policy
@@ -286,6 +287,14 @@ def _part_summary(part_id, part):
         "transfer_encoding": part.get("Content-Transfer-Encoding"),
         "size": len(payload),
         "is_multipart": part.is_multipart(),
+        "child_count": len(part.get_payload()) if part.is_multipart() else 0,
+        "is_attachment": part.get_content_disposition() == "attachment",
+        "is_inline": part.get_content_disposition() == "inline",
+        "is_candidate_body": (
+            not part.is_multipart()
+            and part.get_content_disposition() != "attachment"
+            and part.get_content_type() in {"text/plain", "text/html"}
+        ),
     }
 
 
@@ -297,24 +306,71 @@ def _decode_text_part(part):
     try:
         content = part.get_content()
     except (LookupError, UnicodeDecodeError):
-        content = _part_bytes(part).decode(part.get_content_charset() or "utf-8", "replace")
+        charset = part.get_content_charset() or "utf-8"
+        try:
+            content = _part_bytes(part).decode(charset, "replace")
+        except LookupError:
+            content = _part_bytes(part).decode("utf-8", "replace")
     return content if isinstance(content, str) else str(content)
 
 
+class _ReadableHTMLParser(HTMLParser):
+    """Small, dependency-free HTML-to-text renderer which retains link targets."""
+
+    _BREAK_TAGS = {"br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.output = []
+        self.hidden = 0
+        self.links = []
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag in {"script", "style"}:
+            self.hidden += 1
+        if not self.hidden and tag in self._BREAK_TAGS:
+            self.output.append("\n")
+        if not self.hidden and tag == "a":
+            self.links.append(dict(attrs).get("href"))
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if tag in {"script", "style"} and self.hidden:
+            self.hidden -= 1
+        elif not self.hidden and tag in self._BREAK_TAGS:
+            self.output.append("\n")
+        elif not self.hidden and tag == "a" and self.links:
+            target = self.links.pop()
+            if target:
+                self.output.append(f" <{target}>")
+
+    def handle_data(self, data):
+        if not self.hidden:
+            self.output.append(data)
+
+
 def _html_to_text(content):
-    clean = re.sub(r"<(script|style)\b.*?</\1>", "", content, flags=re.I | re.S)
-    clean = re.sub(r"<(?:br\s*/?|/p|/div|/li|/tr|/h[1-6])\s*>", "\n", clean,
-                   flags=re.I)
-    clean = re.sub(r"<[^>]+>", " ", clean)
+    parser = _ReadableHTMLParser()
+    parser.feed(content)
+    parser.close()
     lines = [re.sub(r"[ \t]+", " ", line).strip()
-             for line in html.unescape(clean).splitlines()]
+             for line in html.unescape("".join(parser.output)).splitlines()]
     return "\n".join(line for line in lines if line).strip()
 
 
 def _body_text(msg):
     plain = []
     rich = []
-    for part_id, part in _iter_mime_parts(msg):
+    parts = list(_iter_mime_parts(msg))
+    attachment_prefixes = tuple(
+        part_id for part_id, part in parts
+        if part.get_content_disposition() == "attachment"
+    )
+    for part_id, part in parts:
+        if any(part_id == prefix or part_id.startswith(prefix + ".")
+               for prefix in attachment_prefixes):
+            continue
         if part.get_content_disposition() == "attachment":
             continue
         if part.get_content_type() not in {"text/plain", "text/html"}:
@@ -339,6 +395,31 @@ def _parsed_message(conn, uid, folder):
     return message_bytes, email.message_from_bytes(message_bytes, policy=default_policy)
 
 
+def _targeted_part(conn, uid, part_id, folder, max_bytes):
+    """Fetch one MIME leaf without downloading the complete message."""
+    if not re.fullmatch(r"[1-9][0-9]*(?:\.[1-9][0-9]*)*", str(part_id)):
+        raise ValueError("part_id must be a dot-separated MIME path such as '2' or '1.2'")
+    _select_readonly(conn, folder)
+    mime_headers = _fetch_bytes(conn, uid, f"(BODY.PEEK[{part_id}.MIME])")
+    header_only = email.message_from_bytes(mime_headers, policy=default_policy)
+    if header_only.get_content_maintype() == "multipart":
+        raise ValueError(f"MIME part {part_id!r} is a container; choose a child part")
+
+    # Transfer encodings expand rather than compress normal MIME content. Four
+    # encoded bytes per permitted decoded byte leaves ample room for base64,
+    # quoted-printable, and line wrapping while still bounding network input.
+    wire_limit = max_bytes * 4 + 4096
+    payload = _fetch_bytes(conn, uid, f"(BODY.PEEK[{part_id}]<0.{wire_limit + 1}>)")
+    if len(payload) > wire_limit:
+        raise ValueError(
+            f"MIME part transfer data exceeds the safe limit for max_bytes={max_bytes}"
+        )
+    separator = b"" if mime_headers.endswith((b"\n\n", b"\r\n\r\n")) else b"\r\n"
+    return email.message_from_bytes(
+        mime_headers + separator + payload, policy=default_policy
+    )
+
+
 def list_message_parts(conn, uid, folder="INBOX"):
     """Describe a message's complete MIME tree without marking it read."""
     _, msg = _parsed_message(conn, uid, folder)
@@ -352,13 +433,7 @@ def read_message_part(conn, uid, part_id, folder="INBOX", format="auto",
         raise ValueError("format must be one of: auto, text, html, base64")
     if max_bytes < 1 or max_bytes > 5_000_000:
         raise ValueError("max_bytes must be between 1 and 5000000")
-    _, msg = _parsed_message(conn, uid, folder)
-    parts = dict(_iter_mime_parts(msg))
-    part = parts.get(str(part_id))
-    if part is None:
-        raise ValueError(f"Unknown MIME part_id {part_id!r}")
-    if part.is_multipart():
-        raise ValueError(f"MIME part {part_id!r} is a container; choose a child part")
+    part = _targeted_part(conn, uid, str(part_id), folder, max_bytes)
     payload = _part_bytes(part)
     if len(payload) > max_bytes:
         raise ValueError(
@@ -376,6 +451,11 @@ def read_message_part(conn, uid, part_id, folder="INBOX", format="auto",
         if chosen == "text" and content_type == "text/html":
             content = _html_to_text(content)
         result.update({"format": chosen, "content": content})
+        if chosen == "html" and content_type != "text/html":
+            result["warning"] = (
+                f"Requested html, but MIME part {part_id!r} is {content_type}; "
+                "returning its decoded text unchanged"
+            )
     else:
         result.update({"format": "base64", "content_base64": base64.b64encode(payload).decode("ascii")})
     return result
@@ -389,14 +469,16 @@ def get_message(conn, uid, folder="INBOX", raw=False):
     result = _header_summary(message_bytes, uid, folder)
     result["cc"] = str(msg.get("Cc", ""))
     result["body"], result["body_source"] = _body_text(msg)
+    result["body_status"] = "found" if result["body_source"] != "none" else "none"
     result["parts"] = message_parts(msg)
     result["attachments"] = [
         {
+            "part_id": part_id,
             "filename": part.get_filename(),
             "content_type": part.get_content_type(),
             "size": len(part.get_payload(decode=True) or b""),
         }
-        for part in msg.walk()
+        for part_id, part in _iter_mime_parts(msg)
         if part.get_content_disposition() == "attachment"
     ]
     return result

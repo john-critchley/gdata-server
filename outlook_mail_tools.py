@@ -158,7 +158,9 @@ async def outlook_list_parts(uid, folder="INBOX"):
     name="outlook_read_part",
     description=(
         "Read one MIME part by folder, stable UID, and part ID; supports decoded "
-        "text, original HTML, or bounded base64. Read-only. "
+        "text, original HTML, or bounded base64 using a targeted IMAP section fetch. "
+        "Requesting HTML for another text subtype returns unchanged decoded text plus "
+        "a warning. Read-only. "
         "See notes key: misc-server/outlook-mail"
     ),
     input_schema={
