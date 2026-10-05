@@ -51,7 +51,37 @@ def test_plugin_discovery_exports_four_outlook_tools():
     tools = {tool.name: tool for tool in discover_tools(
         [outlook_mail_tools.os.path.dirname(outlook_mail_tools.__file__)]
     )}
-    names = {"outlook_folders", "outlook_status", "outlook_search", "outlook_read"}
+    names = {
+        "outlook_folders", "outlook_status", "outlook_search", "outlook_read",
+        "outlook_list_parts", "outlook_read_part",
+    }
     assert names <= tools.keys()
     for name in names:
         assert "notes key: misc-server/outlook-mail" in tools[name].description
+
+
+def test_list_and_read_part_use_stable_uid_and_logout():
+    connection = FakeConnection()
+    with (
+        patch.object(outlook_mail_tools, "_connect", return_value=connection),
+        patch.object(outlook_mail_tools.outlook_imap, "list_message_parts",
+                     return_value={"parts": [{"part_id": "1"}]}) as listing,
+    ):
+        assert run(outlook_mail_tools.outlook_list_parts("23", "Inbox"))["parts"]
+    listing.assert_called_once_with(connection, "23", folder="Inbox")
+    assert connection.logged_out
+
+    connection = FakeConnection()
+    with (
+        patch.object(outlook_mail_tools, "_connect", return_value=connection),
+        patch.object(outlook_mail_tools.outlook_imap, "read_message_part",
+                     return_value={"content": "hello"}) as reading,
+    ):
+        result = run(outlook_mail_tools.outlook_read_part(
+            "23", "1.2", "Inbox", format="text", max_bytes=1234
+        ))
+    assert result == {"content": "hello"}
+    reading.assert_called_once_with(
+        connection, "23", "1.2", folder="Inbox", format="text", max_bytes=1234
+    )
+    assert connection.logged_out

@@ -126,3 +126,68 @@ async def outlook_read(uid, folder="INBOX"):
         _with_connection,
         lambda connection: outlook_imap.get_message(connection, str(uid), folder=folder),
     )
+
+
+@mcp_tool(
+    name="outlook_list_parts",
+    description=(
+        "List the complete MIME structure of one Outlook/Hotmail message using "
+        "deterministic part IDs. Read-only. See notes key: misc-server/outlook-mail"
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "uid": {"type": "string", "pattern": "^[0-9]+$"},
+            "folder": {"type": "string", "default": "INBOX"},
+        },
+        "required": ["uid"],
+    },
+)
+async def outlook_list_parts(uid, folder="INBOX"):
+    if not str(uid).isdigit():
+        raise ValueError("uid must contain decimal digits only")
+    return await asyncio.to_thread(
+        _with_connection,
+        lambda connection: outlook_imap.list_message_parts(
+            connection, str(uid), folder=folder
+        ),
+    )
+
+
+@mcp_tool(
+    name="outlook_read_part",
+    description=(
+        "Read one MIME part by folder, stable UID, and part ID; supports decoded "
+        "text, original HTML, or bounded base64. Read-only. "
+        "See notes key: misc-server/outlook-mail"
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "uid": {"type": "string", "pattern": "^[0-9]+$"},
+            "part_id": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)*$"},
+            "folder": {"type": "string", "default": "INBOX"},
+            "format": {
+                "type": "string",
+                "enum": ["auto", "text", "html", "base64"],
+                "default": "auto",
+            },
+            "max_bytes": {
+                "type": "integer", "minimum": 1, "maximum": 5000000,
+                "default": 1000000,
+            },
+        },
+        "required": ["uid", "part_id"],
+    },
+)
+async def outlook_read_part(uid, part_id, folder="INBOX", format="auto",
+                            max_bytes=1_000_000):
+    if not str(uid).isdigit():
+        raise ValueError("uid must contain decimal digits only")
+    return await asyncio.to_thread(
+        _with_connection,
+        lambda connection: outlook_imap.read_message_part(
+            connection, str(uid), str(part_id), folder=folder,
+            format=format, max_bytes=int(max_bytes),
+        ),
+    )

@@ -13,6 +13,7 @@ get_pop_refresh_token.py to obtain a token covering both POP and IMAP.
 """
 
 import argparse
+import base64
 import email
 import html
 import imaplib
@@ -249,40 +250,146 @@ def mailbox_status(conn, folder="INBOX"):
     return {"folder": folder, **values}
 
 
+def _iter_mime_parts(msg, prefix=""):
+    """Yield deterministic MIME-tree paths and parts, including containers."""
+    if not msg.is_multipart():
+        yield prefix or "1", msg
+        return
+    for index, part in enumerate(msg.iter_parts(), 1):
+        part_id = f"{prefix}.{index}" if prefix else str(index)
+        yield part_id, part
+        if part.is_multipart():
+            yield from _iter_mime_parts(part, part_id)
+
+
+def _part_bytes(part):
+    payload = part.get_payload(decode=True)
+    if payload is not None:
+        return payload
+    if part.is_multipart():
+        return b""
+    value = part.get_payload()
+    if isinstance(value, str):
+        return value.encode(part.get_content_charset() or "utf-8", "replace")
+    return b""
+
+
+def _part_summary(part_id, part):
+    payload = _part_bytes(part)
+    return {
+        "part_id": part_id,
+        "content_type": part.get_content_type(),
+        "charset": part.get_content_charset(),
+        "disposition": part.get_content_disposition(),
+        "filename": part.get_filename(),
+        "content_id": part.get("Content-ID"),
+        "transfer_encoding": part.get("Content-Transfer-Encoding"),
+        "size": len(payload),
+        "is_multipart": part.is_multipart(),
+    }
+
+
+def message_parts(msg):
+    return [_part_summary(part_id, part) for part_id, part in _iter_mime_parts(msg)]
+
+
+def _decode_text_part(part):
+    try:
+        content = part.get_content()
+    except (LookupError, UnicodeDecodeError):
+        content = _part_bytes(part).decode(part.get_content_charset() or "utf-8", "replace")
+    return content if isinstance(content, str) else str(content)
+
+
+def _html_to_text(content):
+    clean = re.sub(r"<(script|style)\b.*?</\1>", "", content, flags=re.I | re.S)
+    clean = re.sub(r"<(?:br\s*/?|/p|/div|/li|/tr|/h[1-6])\s*>", "\n", clean,
+                   flags=re.I)
+    clean = re.sub(r"<[^>]+>", " ", clean)
+    lines = [re.sub(r"[ \t]+", " ", line).strip()
+             for line in html.unescape(clean).splitlines()]
+    return "\n".join(line for line in lines if line).strip()
+
+
 def _body_text(msg):
     plain = []
     rich = []
-    parts = msg.walk() if msg.is_multipart() else (msg,)
-    for part in parts:
+    for part_id, part in _iter_mime_parts(msg):
         if part.get_content_disposition() == "attachment":
             continue
         if part.get_content_type() not in {"text/plain", "text/html"}:
             continue
-        try:
-            content = part.get_content()
-        except (LookupError, UnicodeDecodeError):
-            payload = part.get_payload(decode=True) or b""
-            content = payload.decode("utf-8", "replace")
+        content = _decode_text_part(part).strip()
+        if not content:
+            continue
         if part.get_content_type() == "text/plain":
-            plain.append(content)
+            plain.append((part_id, content))
         else:
-            clean = re.sub(r"<(script|style)\b.*?</\1>", "", content,
-                           flags=re.I | re.S)
-            clean = re.sub(r"<[^>]+>", " ", clean)
-            rich.append(re.sub(r"\s+", " ", html.unescape(clean)).strip())
-    return "\n\n".join(plain or rich).strip()
+            rich.append((part_id, _html_to_text(content)))
+    candidates = plain or rich
+    if not candidates:
+        return "", "none"
+    part_id, content = candidates[0]
+    return content, part_id
+
+
+def _parsed_message(conn, uid, folder):
+    _select_readonly(conn, folder)
+    message_bytes = _fetch_bytes(conn, uid, "(BODY.PEEK[])")
+    return message_bytes, email.message_from_bytes(message_bytes, policy=default_policy)
+
+
+def list_message_parts(conn, uid, folder="INBOX"):
+    """Describe a message's complete MIME tree without marking it read."""
+    _, msg = _parsed_message(conn, uid, folder)
+    return {"folder": folder, "uid": str(uid), "parts": message_parts(msg)}
+
+
+def read_message_part(conn, uid, part_id, folder="INBOX", format="auto",
+                      max_bytes=1_000_000):
+    """Read one deterministic MIME part as text, HTML, or bounded base64."""
+    if format not in {"auto", "text", "html", "base64"}:
+        raise ValueError("format must be one of: auto, text, html, base64")
+    if max_bytes < 1 or max_bytes > 5_000_000:
+        raise ValueError("max_bytes must be between 1 and 5000000")
+    _, msg = _parsed_message(conn, uid, folder)
+    parts = dict(_iter_mime_parts(msg))
+    part = parts.get(str(part_id))
+    if part is None:
+        raise ValueError(f"Unknown MIME part_id {part_id!r}")
+    if part.is_multipart():
+        raise ValueError(f"MIME part {part_id!r} is a container; choose a child part")
+    payload = _part_bytes(part)
+    if len(payload) > max_bytes:
+        raise ValueError(
+            f"MIME part is {len(payload)} bytes, exceeding max_bytes={max_bytes}"
+        )
+    result = {"folder": folder, "uid": str(uid), **_part_summary(str(part_id), part)}
+    content_type = part.get_content_type()
+    chosen = format
+    if chosen == "auto":
+        chosen = "text" if content_type.startswith("text/") else "base64"
+    if chosen in {"text", "html"}:
+        if not content_type.startswith("text/"):
+            raise ValueError(f"MIME part {part_id!r} is {content_type}, not text")
+        content = _decode_text_part(part)
+        if chosen == "text" and content_type == "text/html":
+            content = _html_to_text(content)
+        result.update({"format": chosen, "content": content})
+    else:
+        result.update({"format": "base64", "content_base64": base64.b64encode(payload).decode("ascii")})
+    return result
 
 
 def get_message(conn, uid, folder="INBOX", raw=False):
     """Fetch one message by stable folder UID without setting Seen."""
-    _select_readonly(conn, folder)
-    message_bytes = _fetch_bytes(conn, uid, "(BODY.PEEK[])")
+    message_bytes, msg = _parsed_message(conn, uid, folder)
     if raw:
         return message_bytes
-    msg = email.message_from_bytes(message_bytes, policy=default_policy)
     result = _header_summary(message_bytes, uid, folder)
     result["cc"] = str(msg.get("Cc", ""))
-    result["body"] = _body_text(msg)
+    result["body"], result["body_source"] = _body_text(msg)
+    result["parts"] = message_parts(msg)
     result["attachments"] = [
         {
             "filename": part.get_filename(),
@@ -297,7 +404,8 @@ def get_message(conn, uid, folder="INBOX", raw=False):
 
 def main(command="folders", folder="INBOX", limit=20, unread=False,
          all_folders=False, uid=None, raw=False, sender=None, recipient=None,
-         subject=None, text=None, since=None, before=None, **connect_args):
+         subject=None, text=None, since=None, before=None, part_id=None,
+         format="auto", max_bytes=1_000_000, **connect_args):
     conn = connect(**connect_args)
     try:
         if command == "folders":
@@ -315,6 +423,11 @@ def main(command="folders", folder="INBOX", limit=20, unread=False,
             )
         if command in {"show", "raw"}:
             return get_message(conn, uid, folder=folder, raw=raw or command == "raw")
+        if command == "parts":
+            return list_message_parts(conn, uid, folder=folder)
+        if command == "part":
+            return read_message_part(conn, uid, part_id, folder=folder,
+                                     format=format, max_bytes=max_bytes)
         raise ValueError(f"Unknown command: {command}")
     finally:
         try:
@@ -366,6 +479,15 @@ def _parser():
     raw = sub.add_parser("raw", help="Write the original RFC822 message to stdout")
     raw.add_argument("uid")
     raw.add_argument("--folder", default="INBOX")
+    parts = sub.add_parser("parts", help="List a message's MIME structure")
+    parts.add_argument("uid")
+    parts.add_argument("--folder", default="INBOX")
+    part = sub.add_parser("part", help="Read one MIME part by deterministic part ID")
+    part.add_argument("uid")
+    part.add_argument("part_id")
+    part.add_argument("--folder", default="INBOX")
+    part.add_argument("--format", choices=("auto", "text", "html", "base64"), default="auto")
+    part.add_argument("--max-bytes", type=int, default=1_000_000)
     return parser
 
 
