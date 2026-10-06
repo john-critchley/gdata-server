@@ -1,0 +1,501 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JSONHTL Document",
+  "description": "Machine-readable schema for JSONHTL documents. Canonical note: JSONHTL_SCHEMA. Text spec: gdata-server/linter.",
+  "type": "object",
+  "required": [
+    "content"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "title": {
+      "type": "string"
+    },
+    "version": {
+      "oneOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "updated": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "created": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "runnable": {
+      "type": "boolean"
+    },
+    "content": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/block"
+          }
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "inline_link": {
+      "type": "object",
+      "required": [
+        "link"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "link": {
+          "type": "object",
+          "required": [
+            "href",
+            "text"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "href": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "inline_code": {
+      "type": "object",
+      "required": [
+        "code"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        }
+      }
+    },
+    "inline_bold": {
+      "type": "object",
+      "required": [
+        "bold"
+      ],
+      "additionalProperties": false,
+      "description": "Registered extension. Both renderers support it; not in JSONHTL_SPEC base.",
+      "properties": {
+        "bold": {
+          "type": "string"
+        }
+      }
+    },
+    "inline_element": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/inline_link"
+        },
+        {
+          "$ref": "#/definitions/inline_code"
+        },
+        {
+          "$ref": "#/definitions/inline_bold"
+        },
+        {
+          "$ref": "#/definitions/inline_strong"
+        },
+        {
+          "$ref": "#/definitions/inline_em"
+        },
+        {
+          "$ref": "#/definitions/inline_italic"
+        }
+      ]
+    },
+    "para_content": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/inline_element"
+          }
+        }
+      ]
+    },
+    "table_cell": {
+      "description": "A table cell is a string or an inline-element list (same content model as para), so links and other inline objects are valid in cells.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/inline_element"
+          }
+        }
+      ]
+    },
+    "block_para": {
+      "type": "object",
+      "required": [
+        "para"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "para": {
+          "$ref": "#/definitions/para_content"
+        }
+      }
+    },
+    "block_heading": {
+      "type": "object",
+      "required": [
+        "heading"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "heading": {
+          "type": "object",
+          "required": [
+            "level",
+            "text"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "level": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 6
+            },
+            "text": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "block_codeblock": {
+      "type": "object",
+      "required": [
+        "codeblock"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "codeblock": {
+          "type": "object",
+          "required": [
+            "lang",
+            "body"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "lang": {
+              "type": "string"
+            },
+            "body": {
+              "type": "string"
+            },
+            "exec": {
+              "type": "boolean",
+              "description": "Runnable extension. Only valid when document has runnable: true."
+            },
+            "name": {
+              "type": "string",
+              "description": "Runnable extension. Must be unique within document. Only valid when runnable: true."
+            }
+          }
+        }
+      }
+    },
+    "block_list": {
+      "type": "object",
+      "required": [
+        "list"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "list": {
+          "type": "object",
+          "required": [
+            "items"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "ordered": {
+              "type": "boolean"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/definitions/inline_element"
+                    }
+                  },
+                  {
+                    "type": "object"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "block_table": {
+      "type": "object",
+      "required": [
+        "table"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "table": {
+          "type": "object",
+          "required": [
+            "columns",
+            "rows"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/table_cell"
+                }
+              }
+            },
+            "caption": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "block_image": {
+      "type": "object",
+      "required": [
+        "image"
+      ],
+      "additionalProperties": false,
+      "description": "Spec-base block (JSONHTL_SPEC, added 2026-07-17). Raster image; data is base64.",
+      "properties": {
+        "image": {
+          "type": "object",
+          "required": [
+            "format",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "type": "string"
+            },
+            "data": {
+              "type": "string"
+            },
+            "alt": {
+              "type": "string"
+            },
+            "caption": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "block_svg": {
+      "type": "object",
+      "required": [
+        "svg"
+      ],
+      "additionalProperties": false,
+      "description": "Spec-base block (JSONHTL_SPEC, added 2026-07-17). Inline vector diagram; body is raw SVG XML (text, not base64).",
+      "properties": {
+        "svg": {
+          "type": "object",
+          "required": [
+            "body"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "type": "string"
+            },
+            "alt": {
+              "type": "string"
+            },
+            "caption": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "block_details": {
+      "type": "object",
+      "required": [
+        "details"
+      ],
+      "additionalProperties": false,
+      "description": "Spec-base block (JSONHTL_SPEC, added 2026-07-17). Collapsible section; content is nested blocks.",
+      "properties": {
+        "details": {
+          "type": "object",
+          "required": [
+            "summary",
+            "content"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "summary": {
+              "type": "string"
+            },
+            "content": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/block"
+              }
+            }
+          }
+        }
+      }
+    },
+    "block_section": {
+      "type": "object",
+      "required": [
+        "section"
+      ],
+      "additionalProperties": false,
+      "description": "Nested section container (proposal: proposals/section-editing). title is the heading text; level is optional (defaults to nesting depth); content is a recursive block list. Coexists with the legacy flat heading block during migration.",
+      "properties": {
+        "section": {
+          "type": "object",
+          "required": [
+            "title",
+            "content"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "level": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 6
+            },
+            "content": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/block"
+              }
+            }
+          }
+        }
+      }
+    },
+    "block": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/block_para"
+        },
+        {
+          "$ref": "#/definitions/block_heading"
+        },
+        {
+          "$ref": "#/definitions/block_codeblock"
+        },
+        {
+          "$ref": "#/definitions/block_list"
+        },
+        {
+          "$ref": "#/definitions/block_table"
+        },
+        {
+          "$ref": "#/definitions/block_image"
+        },
+        {
+          "$ref": "#/definitions/block_svg"
+        },
+        {
+          "$ref": "#/definitions/block_details"
+        },
+        {
+          "$ref": "#/definitions/block_section"
+        }
+      ]
+    },
+    "inline_strong": {
+      "type": "object",
+      "required": [
+        "strong"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "strong": {
+          "type": "string"
+        }
+      }
+    },
+    "inline_em": {
+      "type": "object",
+      "required": [
+        "em"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "em": {
+          "type": "string"
+        }
+      }
+    },
+    "inline_italic": {
+      "type": "object",
+      "required": [
+        "italic"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "italic": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
