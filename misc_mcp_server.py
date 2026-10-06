@@ -290,7 +290,8 @@ def make_rest_app(rest_port: int = 8220, store_name: str = 'misc') -> fastapi.Fa
 
 
 def _make_tool_server(store_name: str = 'misc') -> Server:
-    server = Server('misc')
+    # Bump this server version whenever Misc changes; shown in MCP client setup.
+    server = Server('misc', version='1.27.1')
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:

@@ -159,8 +159,9 @@ def _render_inline(item) -> str:
             return f'<a href="{_html.escape(_href(lnk["href"]))}">{_html.escape(lnk.get("text", lnk["href"]))}</a>'
         if 'code' in item:
             return f'<code>{_html.escape(item["code"])}</code>'
-        if 'bold' in item:
-            return f'<strong>{_html.escape(item["bold"])}</strong>'
+        for key, tag in (('bold', 'strong'), ('strong', 'strong'), ('em', 'em'), ('italic', 'em')):
+            if key in item:
+                return f'<{tag}>{_html.escape(item[key])}</{tag}>'
     return ''
 
 
@@ -238,7 +239,7 @@ def _render_image(im) -> str:
     return f'<figure>{img}</figure>'
 
 
-def _render_details(d) -> str:
+def _render_details(d, depth=2) -> str:
     """Render a details block as native <details>/<summary> — collapsed by
     default, expandable per-item with zero JavaScript (browser-native), and
     see _render_page for the pure-CSS "expand all" control.
@@ -246,13 +247,20 @@ def _render_details(d) -> str:
     if not isinstance(d, dict):
         return ''
     summary = _html.escape(str(d.get('summary', '') or ''))
-    nested = _render_content(d.get('content', []))
+    nested = _render_content(d.get('content', []), depth=depth)
     return f'<details><summary>{summary}</summary>{nested}</details>'
 
 
-def _render_block(block) -> str:
+def _render_block(block, depth=2) -> str:
     if not isinstance(block, dict):
         return ''
+
+    if 'section' in block:
+        section = block['section']
+        level = max(1, min(6, int(section.get('level', depth))))
+        title = _html.escape(section['title'])
+        nested = _render_content(section['content'], depth=level + 1)
+        return f'<section><h{level}>{title}</h{level}>{nested}</section>'
 
     if 'para' in block:
         return f'<p>{_render_inlines(block["para"])}</p>'
@@ -276,9 +284,10 @@ def _render_block(block) -> str:
         ths = ''.join(f'<th>{_html.escape(str(c))}</th>' for c in cols)
         trs = ''
         for row in rows:
-            tds = ''.join(f'<td>{_md_inline(str(cell))}</td>' for cell in row)
+            tds = ''.join(f'<td>{_render_inlines(cell) if isinstance(cell, list) else _md_inline(str(cell))}</td>' for cell in row)
             trs += f'<tr>{tds}</tr>'
-        return f'<table class="bks"><thead><tr>{ths}</tr></thead><tbody>{trs}</tbody></table>'
+        caption = f'<caption>{_html.escape(str(t["caption"]))}</caption>' if t.get('caption') else ''
+        return f'<table class="bks">{caption}<thead><tr>{ths}</tr></thead><tbody>{trs}</tbody></table>'
 
     if 'list' in block:
         lst = block['list']
@@ -301,7 +310,7 @@ def _render_block(block) -> str:
         return _render_image(block['image'])
 
     if 'details' in block:
-        return _render_details(block['details'])
+        return _render_details(block['details'], depth=depth)
 
     if 'writable_note' in block:
         return _render_writable_note(block['writable_note'])
@@ -375,7 +384,7 @@ function submitWritableNote(event, notename) {{
     return html
 
 
-def _render_content(content, skip_h1: bool = False) -> str:
+def _render_content(content, skip_h1: bool = False, depth=2) -> str:
     if isinstance(content, str):
         return f'<p>{_md_inline(content)}</p>'
     if isinstance(content, list):
@@ -383,7 +392,7 @@ def _render_content(content, skip_h1: bool = False) -> str:
         for b in content:
             if skip_h1 and isinstance(b, dict) and 'heading' in b and b['heading'].get('level') == 1:
                 continue
-            parts.append(_render_block(b))
+            parts.append(_render_block(b, depth=depth))
         return '\n'.join(parts)
     return ''
 

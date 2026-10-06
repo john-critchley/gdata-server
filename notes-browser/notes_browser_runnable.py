@@ -319,7 +319,7 @@ class NotesHTMLRenderer:
         html.append('</body></html>')
         return '\n'.join(html)
     
-    def _render_jsonhtl_blocks(self, blocks, skip_h1=False):
+    def _render_jsonhtl_blocks(self, blocks, skip_h1=False, depth=2):
         """Render a list of JSONHTL block elements."""
         html = []
         for idx, block in enumerate(blocks):
@@ -328,6 +328,11 @@ class NotesHTMLRenderer:
                     if skip_h1 and isinstance(block['heading'], dict) and block['heading'].get('level') == 1:
                         continue
                     html.append(self._render_heading(block['heading'], idx))
+                elif 'section' in block:
+                    section = block['section']
+                    level = min(6, max(1, int(section.get('level', depth))))
+                    html.append(self._render_heading({'level': level, 'text': section['title']}))
+                    html.append(self._render_jsonhtl_blocks(section['content'], depth=level + 1))
                 elif 'para' in block:
                     html.append(self._render_para(block['para'], idx))
                 elif 'codeblock' in block:
@@ -341,7 +346,7 @@ class NotesHTMLRenderer:
                 elif 'image' in block:
                     html.append(svg_render.image_block_to_html(block['image'], self._escape))
                 elif 'details' in block:
-                    html.append(self._render_details(block['details']))
+                    html.append(self._render_details(block['details'], depth=depth))
                 else:
                     # Unknown block types are ignored to match notes.wsgi behavior.
                     continue
@@ -379,8 +384,10 @@ class NotesHTMLRenderer:
                     result.append(self._render_link(item['link']))
                 elif 'code' in item:
                     result.append(f'<code>{self._escape(item["code"])}</code>')
-                elif 'bold' in item:
-                    result.append(f'<b>{self._escape(item["bold"])}</b>')
+                elif any(k in item for k in ('bold', 'strong', 'em', 'italic')):
+                    key = next(k for k in ('bold', 'strong', 'em', 'italic') if k in item)
+                    tag = 'b' if key in ('bold', 'strong') else 'i'
+                    result.append(f'<{tag}>{self._escape(item[key])}</{tag}>')
                 elif 'href' in item:
                     # Direct link object
                     result.append(self._render_link(item))
@@ -500,7 +507,7 @@ class NotesHTMLRenderer:
         rows.append(f'</{tag}>')
         return '\n'.join(rows)
 
-    def _render_details(self, details_dict):
+    def _render_details(self, details_dict, depth=2):
         """Render a details block.
 
         Known gap: wx.html.HtmlWindow has no <details>/<summary> support
@@ -515,7 +522,7 @@ class NotesHTMLRenderer:
         if not isinstance(details_dict, dict):
             return ''
         summary = self._escape(str(details_dict.get('summary', '') or ''))
-        nested = self._render_jsonhtl_blocks(details_dict.get('content', []) or [])
+        nested = self._render_jsonhtl_blocks(details_dict.get('content', []) or [], depth=depth)
         return (
             '<table width="100%" style="border: 1px solid #ccc; margin: 8px 0;" cellpadding="0" cellspacing="0">'
             f'<tr><td bgcolor="#eeeeee" style="padding: 6px 10px;"><b>{summary}</b></td></tr>'
@@ -533,6 +540,8 @@ class NotesHTMLRenderer:
             f'<table style="border-collapse: collapse; width: 100%; margin: 8px 0; '
             f'font-family: {self.font_family}; font-size: {self.font_size_pt}pt;">'
         ]
+        if table.get('caption'):
+            html.append(f'<caption>{self._escape(str(table["caption"]))}</caption>')
         # Header row — dark background, white text (matches .bks th style)
         if columns:
             html.append('<tr>')
@@ -550,7 +559,7 @@ class NotesHTMLRenderer:
             for cell in cells:
                 html.append(
                     f'<td{bg_attr} style="border: 1px solid #ddd; padding: 8px;">'
-                    f'{self._render_markup_text(str(cell))}</td>'
+                    f'{self._render_inline_list(cell) if isinstance(cell, list) else self._render_markup_text(str(cell))}</td>'
                 )
             html.append('</tr>')
         html.append('</table>')
