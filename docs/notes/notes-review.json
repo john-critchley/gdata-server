@@ -1,0 +1,501 @@
+{
+  "title": "Notes Review 2026-10",
+  "version": 2,
+  "created": "2026-10-06",
+  "updated": "2026-10-06",
+  "tags": [
+    "meta",
+    "review",
+    "maintenance"
+  ],
+  "content": [
+    {
+      "heading": {
+        "level": 1,
+        "text": "Notes Review 2026-10"
+      }
+    },
+    {
+      "para": [
+        "Tracking pass over living notes for accuracy, completeness, and staleness. Seeded 2026-10-06 from full key listing. Skipped: !gloss entries, envoy/drain/*, envoy/changelog/*, envoy/task/*, envoy/test/*, envoy/testing/*, all timestamped session/handover records, tmp/*, scratch/*."
+      ]
+    },
+    {
+      "para": [
+        {
+          "bold": "Status markers:"
+        },
+        " [ ] pending   [x] done:DATE   [~] skip (archive/historical, not a living doc)"
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "README & conventions"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] README",
+          "[ ] README/agent",
+          "[ ] README/command-line-tools",
+          "[ ] README/diagnosis",
+          "[ ] README/documentation-in-notes",
+          "[ ] README/end-of-day",
+          "[ ] README/format",
+          "[ ] README/jsonhtl-para-arrays",
+          "[ ] README/keys",
+          "[ ] README/lessons",
+          "[ ] README/link-curation",
+          "[ ] README/links",
+          "[ ] README/mcp-note-editing",
+          "[ ] README/mcp-tools",
+          "[ ] README/metadata",
+          "[ ] README/notes-put",
+          "[ ] README/organization",
+          "[ ] README/orphaning",
+          "[ ] README/runnable",
+          "[ ] README/tools",
+          "[ ] README/tools/compact-line-checksums",
+          "[ ] README/tools/describe-secrets",
+          "[ ] README/tools/ocr4-binary-encoding",
+          "[ ] README/tools/perl-child-capture-debugging",
+          "[ ] README/tools/vnc-capture",
+          "[ ] README/workflow",
+          "[ ] README/writable-note"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "PROGRAMMING_RULES"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] PROGRAMMING_RULES",
+          "[ ] PROGRAMMING_RULES/ai-agent-guidelines",
+          "[ ] PROGRAMMING_RULES/cli-options",
+          "[ ] PROGRAMMING_RULES/collaborative-technical-work",
+          "[ ] PROGRAMMING_RULES/error-messages",
+          "[ ] PROGRAMMING_RULES/exceptions",
+          "[ ] PROGRAMMING_RULES/freebsd-build-from-source",
+          "[ ] PROGRAMMING_RULES/main-pattern",
+          "[ ] PROGRAMMING_RULES/operating-asynchronous-deployments",
+          "[ ] PROGRAMMING_RULES/philosophy",
+          "[ ] PROGRAMMING_RULES/project-documentation",
+          "[ ] PROGRAMMING_RULES/project-testing",
+          "[ ] PROGRAMMING_RULES/remote-gui-and-ephemeral-ops",
+          "[ ] PROGRAMMING_RULES/reversible-remote-test-cycles",
+          "[ ] PROGRAMMING_RULES/security-interfaces",
+          "[ ] PROGRAMMING_RULES/shell-style",
+          "[ ] PROGRAMMING_RULES/temp-files",
+          "[ ] PROGRAMMING_RULES/unix-stream-input"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "radagast / FreeBSD"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[x] 2026-10-05 — radagast/ml-ports-build",
+          "[ ] radagast/lessons-makeinfo-2026-09",
+          "[ ] radagast/todo-next-session",
+          "[ ] hosts/radagast",
+          "[ ] hosts/radagast/source-upgrade",
+          "[ ] freebsd-ports-lessons/symlink-rm-incident"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "UUCP"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] uucp",
+          "[x] 2026-10-05 — uucp/radagast",
+          "[ ] uucp/mail",
+          "[ ] uucp/setup-status",
+          "[ ] uucp/handover-next-actions"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Hosts & infrastructure"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] hosts",
+          "[ ] hosts/gravlax",
+          "[ ] hosts/kelp",
+          "[ ] hosts/mac-mini",
+          "[ ] hosts/nameko",
+          "[ ] infrastructure/radagast",
+          "[ ] infrastructure/kelp-dante-socks5",
+          "[ ] john/system-config",
+          "[ ] john/system-config/socks5"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Location DB"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] location-db",
+          "[ ] location-db/architecture",
+          "[ ] location-db/gazetteer",
+          "[ ] location-db/hibernate-on-approach",
+          "[ ] location-db/monitoring",
+          "[ ] location-db/outcodes-1deg",
+          "[ ] location-db/public-timetable",
+          "[ ] location-db/schema",
+          "[ ] location-db/usage",
+          "[ ] location-db/wtt-timetable"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Hibernate on approach"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] hibernate-on-approach",
+          "[ ] hibernate-on-approach/considerations",
+          "[ ] hibernate-on-approach/data-sources",
+          "[ ] hibernate-on-approach/design",
+          "[ ] hibernate-on-approach/development",
+          "[ ] hibernate-on-approach/findings",
+          "[ ] hibernate-on-approach/running",
+          "[ ] hibernate-on-approach/todo"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "gdata-server (notes system)"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] gdata-server",
+          "[ ] gdata-server/auth-design",
+          "[ ] gdata-server/backup",
+          "[ ] gdata-server/database",
+          "[ ] gdata-server/http-formats",
+          "[ ] gdata-server/infrastructure",
+          "[ ] gdata-server/linter",
+          "[ ] gdata-server/mcp-auth-consolidation",
+          "[ ] gdata-server/mcp-server",
+          "[ ] gdata-server/notes",
+          "[ ] gdata-server/notes/design",
+          "[ ] gdata-server/notes/usage",
+          "[ ] gdata-server/server",
+          "[ ] gdata-server/server/api",
+          "[ ] gdata-server/server/configuration",
+          "[ ] gdata-server/server/design",
+          "[ ] gdata-server/server/usage",
+          "[ ] gdata-server/testing",
+          "[ ] gdata-server/todo",
+          "[ ] gdata-server/troubleshooting"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "popit3"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] popit3",
+          "[ ] popit3/architecture",
+          "[ ] popit3/database",
+          "[ ] popit3/deployment",
+          "[ ] popit3/development",
+          "[ ] popit3/email-routing",
+          "[ ] popit3/imap-delivery",
+          "[ ] popit3/job-api",
+          "[ ] popit3/mail-filters",
+          "[ ] popit3/mcp-mailbox-access",
+          "[ ] popit3/mcp-tool-plugin-authoring",
+          "[ ] popit3/message-store",
+          "[ ] popit3/message-store/api",
+          "[ ] popit3/msauth",
+          "[ ] popit3/msauth-proxy",
+          "[ ] popit3/ops",
+          "[ ] popit3/process-emails",
+          "[ ] popit3/todo"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "envoy (living docs only)"
+      }
+    },
+    {
+      "para": [
+        "Skipping drain/*, changelog/*, task/*, test/*, testing/*, report/* — historical records."
+      ]
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] envoy",
+          "[ ] envoy/api-calls",
+          "[ ] envoy/architecture-summary",
+          "[ ] envoy/code-overview",
+          "[ ] envoy/design-spec",
+          "[ ] envoy/design-supplement",
+          "[ ] envoy/email-organization",
+          "[ ] envoy/folder-design",
+          "[ ] envoy/imap-client",
+          "[ ] envoy/improvements",
+          "[ ] envoy/issues",
+          "[ ] envoy/logging",
+          "[ ] envoy/maintenance-instructions",
+          "[ ] envoy/model-tiers",
+          "[ ] envoy/note-discovery-strategy",
+          "[ ] envoy/orchestrator",
+          "[ ] envoy/sonnet",
+          "[ ] envoy/start",
+          "[ ] envoy/todo",
+          "[ ] envoy/usage-guide",
+          "[ ] memory/envoy",
+          "[ ] memory/envoy/bugs",
+          "[ ] memory/envoy/infrastructure",
+          "[ ] memory/envoy/mail-server",
+          "[x] done:2026-10-06 memory/envoy/notes-system — workflow, root-read semantics, grammar and tooling verified; stale deploy path flagged.",
+          "[ ] memory/envoy/orchestrator",
+          "[ ] memory/envoy/smtp",
+          "[ ] memory/envoy/testing",
+          "[ ] memory/envoy/webdav"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "pwsafe"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] pwsafe",
+          "[ ] pwsafe/core",
+          "[ ] pwsafe/crypto",
+          "[ ] pwsafe/dev",
+          "[ ] pwsafe/dev/decisions",
+          "[ ] pwsafe/fileformat",
+          "[ ] pwsafe/launching",
+          "[ ] pwsafe/security_audits",
+          "[ ] pwsafe/transport",
+          "[ ] pwsafe/webdav"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "delayrepay"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] delayrepay",
+          "[ ] delayrepay/claims",
+          "[ ] delayrepay/lessons",
+          "[ ] delayrepay/provisioning",
+          "[ ] delayrepay/toolkit",
+          "[ ] delayrepay/viewer-setup"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "ansible"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] ansible",
+          "[ ] ansible/aws-browser-host",
+          "[ ] ansible/decom-host",
+          "[ ] ansible/helper-scripts",
+          "[ ] ansible/playbooks",
+          "[ ] ansible/provision-arm-host",
+          "[ ] ansible/todo"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "SSL / certs"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] ssl",
+          "[ ] ssl/certhub-todo",
+          "[ ] ssl/create-certs",
+          "[ ] ssl/pki",
+          "[ ] ssl-patterns"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "ask"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] ask",
+          "[ ] ask/architecture",
+          "[ ] ask/deployment",
+          "[ ] ask/design-decisions",
+          "[ ] ask/integration",
+          "[ ] ask/jobs",
+          "[ ] ask/quick-reference"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "gloss"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] gloss",
+          "[ ] gloss/concepts",
+          "[ ] gloss/evaluation",
+          "[ ] gloss/evidence-rules",
+          "[ ] gloss/handover-to-codex"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Z80-sudoku-challenge"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] Z80-sudoku-challenge/index",
+          "[ ] Z80-sudoku-challenge/design-doc",
+          "[ ] Z80-sudoku-challenge/status",
+          "[ ] Z80-sudoku-challenge/algorithm",
+          "[ ] Z80-sudoku-challenge/memory-map"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "ideas"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] ideas",
+          "[ ] ideas/ai-operational-safety-rules",
+          "[ ] ideas/concept-factorisation",
+          "[ ] ideas/jpeg-obscura/project-index",
+          "[ ] ideas/jpeg-region-scrambling",
+          "[ ] ideas/openzfs-mount-shadowing-upstream",
+          "[ ] ideas/sandbox-host-context-and-local-services",
+          "[ ] ideas/table-editing-robustness"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "John / personal / memory"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] john",
+          "[ ] memory/john",
+          "[ ] MEMORY/claude — 2026-10-06 partial review: obsolete MCP-put prohibition corrected and code formatted; desktop/VNC environment claims remain to verify.",
+          "[ ] john/actions",
+          "[ ] personal/interests",
+          "[ ] personal/vocabulary",
+          "[ ] instructions/Claude"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Navigation & meta"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "[ ] CONTENTS",
+          "[ ] TRIGGERS",
+          "[ ] TODO",
+          "[ ] HOT",
+          "[ ] IMPORTANT",
+          "[ ] STATE_OF_PLAY",
+          "[ ] mcp-conventions",
+          "[ ] plugins",
+          "[ ] OwnTracks",
+          "[ ] gazetteer",
+          "[ ] cloudflare",
+          "[ ] misc-server",
+          "[ ] notes-browser",
+          "[ ] using-gps-data"
+        ]
+      }
+    }
+  ]
+}

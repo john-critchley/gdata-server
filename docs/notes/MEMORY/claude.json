@@ -1,0 +1,210 @@
+{
+  "title": "Claude-Specific Memory",
+  "version": 3,
+  "created": "2026-05-28",
+  "updated": "2026-10-06",
+  "tags": [
+    "memory",
+    "agent",
+    "claude"
+  ],
+  "content": [
+    {
+      "heading": {
+        "level": 1,
+        "text": "Claude-Specific Memory"
+      }
+    },
+    {
+      "para": [
+        "Parent: ",
+        {
+          "link": {
+            "href": "MEMORY",
+            "text": "MEMORY"
+          }
+        }
+      ]
+    },
+    {
+      "para": [
+        "Claude-specific persistent memory belongs here. Shared conventions and system-wide facts belong in ",
+        {
+          "link": {
+            "href": "MEMORY",
+            "text": "MEMORY"
+          }
+        },
+        "."
+      ]
+    },
+    {
+      "para": [
+        "Use this note for Claude-only behaviours, connector quirks, prompts, or workflow state that should not apply to Codex or other agents."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Behavioural Rules"
+      }
+    },
+    {
+      "para": [
+        "• Python packages: read ",
+        {
+          "link": {
+            "href": "john/pip",
+            "text": "john/pip"
+          }
+        },
+        " before installing anything — it has the correct install method (",
+        {
+          "code": "pipin"
+        },
+        " alias) and per-project install history. Update it after installing.",
+        "• Desktop/session commands: always run as ",
+        {
+          "code": "john"
+        },
+        ", never ",
+        {
+          "code": "sudo -u admin"
+        },
+        ". The XFCE/VNC session runs as john. Only use admin/sudo for Ansible tasks.",
+        "• VNC: server uses SecurityTypes None — no VNC password. Screen locks use the Linux user password for john."
+      ]
+    },
+    {
+      "para": [
+        "• Proactive action list: read ",
+        {
+          "link": {
+            "href": "john/actions",
+            "text": "john/actions"
+          }
+        },
+        " at the start of every session and mention any pending items to John, even when the conversation is about something else entirely."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Notes Browser: control socket"
+      }
+    },
+    {
+      "para": [
+        "The notes browser (~/py/gdata-server/notes-browser/notes_browser.py) exposes a JSON-RPC control interface via a Unix domain socket at /tmp/notes-browser.sock when launched with --control-unix-socket /tmp/notes-browser.sock (or env var NOTES_BROWSER_CONTROL_UNIX_SOCKET)."
+      ]
+    },
+    {
+      "para": [
+        "• ",
+        {
+          "strong": "Leaked-credential rule (standing): "
+        },
+        "if any secret is printed into a session transcript (auth headers, ",
+        {
+          "code": ".netrc"
+        },
+        "/config dumps, keys, tokens), IMMEDIATELY record it in the private note ",
+        {
+          "link": {
+            "href": "security/key-rotations",
+            "text": "security/key-rotations"
+          }
+        },
+        " (identifier, how/when exposed, priority, rotate action, status) and tell John to rotate. Keep adding any further leaks to that same note; re-scan the session for other printed secrets before treating the work as done. Treat ",
+        {
+          "code": ".netrc"
+        },
+        " as radioactive — never cat/grep it to output (lines can carry inline creds)."
+      ]
+    },
+    {
+      "para": [
+        "To check if it is running: ls /tmp/notes-browser.sock"
+      ]
+    },
+    {
+      "para": [
+        "To launch it headlessly into the background: cd ~/py/gdata-server/notes-browser && DISPLAY=:1 python3 notes_browser.py --control-unix-socket /tmp/notes-browser.sock &"
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "python",
+        "body": "import socket, json\nsock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\nsock.connect('/tmp/notes-browser.sock')\nreq = json.dumps({'jsonrpc':'2.0','id':1,'method':'navigate.go_to_page','params':{'key':'DavidLloydSchedule'}}) + '\\n'\nsock.sendall(req.encode()); sock.close()"
+      }
+    },
+    {
+      "para": [
+        "Other useful methods: navigate.back, navigate.forward, navigate.home, navigate.refresh, ui.capture_screenshot (returns base64 PNG in result.data)."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Notes: Writing Documents with Code"
+      }
+    },
+    {
+      "para": [
+        "Canonical JSONHTL codeblocks use lang and body. The linter flags language/text aliases; some compatibility renderers still accept them. See ",
+        {
+          "link": {
+            "href": "README/jsonhtl-extensions",
+            "text": "JSONHTL extensions and compatibility"
+          }
+        },
+        " for current rules."
+      ]
+    },
+    {
+      "para": [
+        "Use Notes MCP tools when available. MCP put accepts a structured document object, including code, and was verified repeatedly on 2026-10-06. The old blanket double-encoding workaround is obsolete. For targeted edits use patch/batch with fresh block IDs and if_rev; for a structural rewrite use put with if_rev, then read back. See ",
+        {
+          "link": {
+            "href": "README/mcp-note-editing",
+            "text": "MCP Note Editing Guide"
+          }
+        },
+        "."
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "text",
+        "body": "get(key, include_block_ids=true)\nput(key, value=<JSONHTL object>, if_rev=<returned rev>)\nget(key)  # verify stored object, content and metadata"
+      }
+    },
+    {
+      "para": [
+        "CLI fallback: write a local JSON file and load it through notes load, or use notes-put for stdin. Prefer MCP when available; see ",
+        {
+          "link": {
+            "href": "README/workflow",
+            "text": "README/workflow"
+          }
+        },
+        " and ",
+        {
+          "link": {
+            "href": "README/notes-put",
+            "text": "README/notes-put"
+          }
+        },
+        "."
+      ]
+    },
+    {
+      "para": [
+        {
+          "strong": "Date-check rule: "
+        },
+        "when a note or document mentions a future date (event, meeting, deadline), compare it to today's date before making any statement about whether it has happened. Do not say \"you attended X\" or \"you completed X\" if the event date is still in the future. This applies to bootcamps, meetings, courses, travel, and any other dated event."
+      ]
+    }
+  ]
+}
