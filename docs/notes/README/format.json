@@ -1,0 +1,435 @@
+{
+  "title": "Format Details",
+  "version": 8,
+  "updated": "2026-10-06",
+  "content": [
+    {
+      "heading": {
+        "level": 1,
+        "text": "Format Details"
+      }
+    },
+    {
+      "para": [
+        "Parent: ",
+        {
+          "link": {
+            "href": "README",
+            "text": "README"
+          }
+        }
+      ]
+    },
+    {
+      "para": [
+        "This document covers formatting rules that extend the base JSONHTL specification."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Markdown in Strings"
+      }
+    },
+    {
+      "para": [
+        "String values within JSONHTL may contain markdown inline formatting. For example, a paragraph string may include `backtick code`, **bold**, or *emphasis* using standard markdown syntax."
+      ]
+    },
+    {
+      "para": [
+        "Where markdown and JSONHTL objects express the same thing, both are valid. For example, these are equivalent:"
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\"para\": [\"See \", {\"code\": \"config.yaml\"}, \" for details.\"]}"
+      }
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\"para\": [\"See `config.yaml` for details.\"]}"
+      }
+    },
+    {
+      "para": [
+        "Similarly, a heading can be expressed as a JSONHTL block or as a markdown-formatted string within a ",
+        {
+          "code": "para"
+        },
+        " element, though the structured form is preferred for machine processing."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Lists and Line Breaks"
+      }
+    },
+    {
+      "para": [
+        "Items in a ",
+        {
+          "code": "para"
+        },
+        " array are rendered inline (concatenated). To display items on separate lines, use separate ",
+        {
+          "code": "para"
+        },
+        " blocks or a structured ",
+        {
+          "code": "list"
+        },
+        " block."
+      ]
+    },
+    {
+      "para": [
+        "WRONG — items run together:"
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\"para\": [\"1. First item\", \"2. Second item\", \"3. Third item\"]}"
+      }
+    },
+    {
+      "para": [
+        "Renders as: \"1. First item2. Second item3. Third item\""
+      ]
+    },
+    {
+      "para": [
+        "CORRECT — each item on its own line:"
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\"para\": [\"1. First item\"]},\n{\"para\": [\"2. Second item\"]},\n{\"para\": [\"3. Third item\"]}"
+      }
+    },
+    {
+      "para": [
+        "For real lists, prefer the structured ",
+        {
+          "code": "list"
+        },
+        " block when renderer support is available. Separate ",
+        {
+          "code": "para"
+        },
+        " blocks remain acceptable for simple notes and compatibility."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Normalisation"
+      }
+    },
+    {
+      "para": [
+        "Systems may normalise all content to one form (structured JSONHTL objects or markdown strings). During the current phase, both coexist. A normaliser tool is planned — see ",
+        {
+          "link": {
+            "href": "Future",
+            "text": "Future"
+          }
+        },
+        "."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Content Shorthand"
+      }
+    },
+    {
+      "para": [
+        {
+          "code": "content"
+        },
+        " may be a plain string instead of a list. The string ",
+        {
+          "code": "\"Just some text.\""
+        },
+        " is equivalent to ",
+        {
+          "code": "[{\"para\": [\"Just some text.\"]}]"
+        },
+        ". Parsers should normalise to list form internally."
+      ]
+    },
+    {
+      "para": [
+        "Likewise, where any value is specified as a list, a bare scalar is shorthand for a single-element list."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Tables"
+      }
+    },
+    {
+      "para": [
+        "Tabular data uses the ",
+        {
+          "code": "table"
+        },
+        " block type. A table contains ",
+        {
+          "code": "columns"
+        },
+        " (list of column header strings) and ",
+        {
+          "code": "rows"
+        },
+        " (list of rows, where each row is a list of cell values in column order)."
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\n  \"table\": {\n    \"columns\": [\n      \"Layer\",\n      \"Role\"\n    ],\n    \"rows\": [\n      [\n        \"GPT\",\n        \"thinking\"\n      ],\n      [\n        \"Email\",\n        \"communication\"\n      ],\n      [\n        \"Notes DB\",\n        \"memory\"\n      ]\n    ]\n  }\n}"
+      }
+    },
+    {
+      "para": [
+        "Each cell value is either a string or a list of inline elements (the same content model as ",
+        {
+          "code": "para"
+        },
+        "). A string cell may contain markdown inline markup (bold, code, italic) as in ",
+        {
+          "code": "para"
+        },
+        " text. A list cell may contain structured inline objects — most usefully ",
+        {
+          "code": "link"
+        },
+        " — so a table cell can hold a clickable link exactly as a paragraph can. Renderers must handle both cell forms; a bare string and a single-element inline list wrapping that string are equivalent."
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\n  \"table\": {\n    \"columns\": [\"Ticket\", \"Summary\"],\n    \"rows\": [\n      [\n        [{\"link\": {\"href\": \"jira/tickets/HCLPDRM-38781\", \"text\": \"HCLPDRM-38781\"}}],\n        \"Portal UI and state detection\"\n      ]\n    ]\n  }\n}"
+      }
+    },
+    {
+      "para": [
+        "This structure maps directly to a Pandas DataFrame:"
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "python",
+        "body": "import pandas as pd\ntable = block[\"table\"]\ndf = pd.DataFrame(table[\"rows\"], columns=table[\"columns\"])"
+      }
+    },
+    {
+      "para": [
+        "And back again:"
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "python",
+        "body": "table_block = {\"table\": {\"columns\": list(df.columns), \"rows\": df.values.tolist()}}"
+      }
+    },
+    {
+      "para": [
+        "The Pandas mapping above assumes scalar (string) cells. When a cell is an inline-element list, ",
+        {
+          "code": "pd.DataFrame"
+        },
+        " stores the list itself as the cell value; consumers doing tabular analysis should flatten such cells to their concatenated text first."
+      ]
+    },
+    {
+      "para": [
+        "Tables should be used for genuinely tabular data. For simple key-value pairs where only two columns exist, a series of ",
+        {
+          "code": "para"
+        },
+        " blocks may be clearer. Use judgement."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Lists"
+      }
+    },
+    {
+      "para": [
+        "Structured lists use the ",
+        {
+          "code": "list"
+        },
+        " block type. A list has an optional ",
+        {
+          "code": "label"
+        },
+        " (string), an optional ",
+        {
+          "code": "ordered"
+        },
+        " flag (boolean, default false), and an ",
+        {
+          "code": "items"
+        },
+        " array."
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\n  \"list\": {\n    \"label\": \"issues\",\n    \"ordered\": false,\n    \"items\": [\n      \"A plain string item\",\n      [\"An item with \", {\"code\": \"inline elements\"}],\n      {\"id\": \"foo\", \"title\": \"An object item\", \"status\": \"open\"}\n    ]\n  }\n}"
+      }
+    },
+    {
+      "para": [
+        "Each item may be:"
+      ]
+    },
+    {
+      "para": [
+        "• A string — plain text, markdown inline formatting permitted."
+      ]
+    },
+    {
+      "para": [
+        "• A list of inline elements — same content model as ",
+        {
+          "code": "para"
+        },
+        "."
+      ]
+    },
+    {
+      "para": [
+        "• An object — arbitrary key-value pairs. Renderers display each pair as ",
+        {
+          "code": "key: value"
+        },
+        " within the list item. Values that look like internal note paths (containing ",
+        {
+          "code": "/"
+        },
+        ", no spaces, not http) should be rendered as navigate links."
+      ]
+    },
+    {
+      "para": [
+        "The ",
+        {
+          "code": "label"
+        },
+        ", if present, is rendered as a visible bold prefix immediately before the list. Renderers use ",
+        {
+          "code": "<ul>"
+        },
+        " for unordered and ",
+        {
+          "code": "<ol>"
+        },
+        " for ordered lists."
+      ]
+    },
+    {
+      "para": [
+        "Human view: the label appears as bold text, items appear as a bullet or numbered list; object items show their properties inline."
+      ]
+    },
+    {
+      "para": [
+        "Machine view: a dict with keys ",
+        {
+          "code": "label"
+        },
+        ", ",
+        {
+          "code": "ordered"
+        },
+        ", ",
+        {
+          "code": "items"
+        },
+        "; items are strings, inline arrays, or dicts and can be iterated and filtered directly."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Todo / Checklist Content"
+      }
+    },
+    {
+      "para": [
+        "Exception: once the notes browser implements interactive checkbox toggling for ",
+        {
+          "code": "status"
+        },
+        " fields, the list-with-object-items pattern will be appropriate for interactive checklists. Until then, use a table."
+      ]
+    },
+    {
+      "para": [
+        "Avoid — list with object items:"
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\n  \"list\": {\n    \"items\": [\n      {\"status\": \"open\", \"title\": \"Bearer token auth\", \"detail\": \"Replace basic auth...\"}\n    ]\n  }\n}"
+      }
+    },
+    {
+      "para": [
+        "Preferred pattern — table:"
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\n  \"table\": {\n    \"columns\": [\"Item\", \"Detail\"],\n    \"rows\": [\n      [\"Bearer token auth\", \"Replace basic auth when token is available\"],\n      [\"Derive clientMachine\", \"Look up from cluster object instead of shell-out\"]\n    ]\n  }\n}"
+      }
+    },
+    {
+      "para": [
+        "List object items (",
+        {
+          "code": "{status, title, detail}"
+        },
+        ") render as raw ",
+        {
+          "code": "key: value"
+        },
+        " text, which is unsuitable for human-readable todo content. Use a ",
+        {
+          "code": "table"
+        },
+        " block instead for todo/future-work lists where each item has a title and description."
+      ]
+    },
+    {
+      "para": [
+        {
+          "link": {
+            "href": "README/jsonhtl-extensions",
+            "text": "Authoritative extension registry"
+          }
+        },
+        " — list/table/bold/runnable grammar, examples, canonical aliases, consumer compatibility, and linting."
+      ]
+    }
+  ]
+}

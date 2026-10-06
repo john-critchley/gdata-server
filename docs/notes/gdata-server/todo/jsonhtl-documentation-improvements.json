@@ -1,0 +1,241 @@
+{
+  "title": "JSONHTL Documentation Improvements",
+  "version": 3,
+  "created": "2026-05-28",
+  "updated": "2026-10-06",
+  "tags": [
+    "gdata-server",
+    "jsonhtl",
+    "documentation",
+    "todo"
+  ],
+  "content": [
+    {
+      "heading": {
+        "level": 1,
+        "text": "JSONHTL Documentation Improvements"
+      }
+    },
+    {
+      "para": [
+        "Parent: ",
+        {
+          "link": {
+            "href": "gdata-server/todo",
+            "text": "gdata-server/todo"
+          }
+        }
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Completed 2026-10-06"
+      }
+    },
+    {
+      "para": [
+        "Status: the specific JSONHTL documentation and compatibility improvements are complete. The assessment and recommendations above are retained as the historical motivation."
+      ]
+    },
+    {
+      "list": {
+        "items": [
+          "Registry created at README/jsonhtl-extensions and linked from README, README/format, JSONHTL_SPEC and JSONHTL_SCHEMA.",
+          "JSONHTL_SPEC advanced to 0.5; registered extension grammar, shorthand, aliases, malformed/unknown handling, section-level defaults and consumer fallbacks documented.",
+          "Schema reconciled with table captions, string/integer version metadata, typed list items and registered strong/em/italic inline forms.",
+          "lint_jsonhtl.py added: live/offline schema, --key/--file/--all, recursive aliases, runnable cross-field checks and name uniqueness, table width, optional metadata and internal-link checks.",
+          "Web and desktop renderer changes reconciled against the live branch, preserving its existing sections, inline-cell support and aliases. Captions and section depth through details corrected.",
+          "Older local desktop variants and shared Envoy HTML renderer updated; static exporter inherits shared support for sections, details, SVG/images, inline emphasis and linked cells.",
+          "73 release tests passed; spec/schema/registry lint clean; live renderer and public note pages verified. Gdata release a5b3738 deployed to gravlax and service restarted. Shared renderer changes committed locally in Envoy as f3c5c91; pre-existing working-tree changes preserved."
+        ]
+      }
+    },
+    {
+      "para": [
+        "Separate remaining work: full corpus cleanup, automatic alias normalisation, linter enforcement in write paths, and native desktop collapse controls. Internal-link checks identify unresolved targets; detecting actual orphaned notes requires a separate incoming-link graph audit. Shared-renderer/exporter changes are active locally; running desktop viewers need reopening to load changed Python code."
+      ]
+    },
+    {
+      "para": [
+        "Assessment from 2026-05-28: JSONHTL is broadly well documented for its current size and purpose. The core model is clear, minimal, and LLM-friendly. The main documentation risk is undocumented extensions that have grown around the base format."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Strengths"
+      }
+    },
+    {
+      "para": [
+        "• ",
+        {
+          "link": {
+            "href": "JSONHTL_SPEC",
+            "text": "JSONHTL_SPEC"
+          }
+        },
+        " clearly defines document objects, ",
+        {
+          "code": "content"
+        },
+        ", block elements, inline elements, links, and unknown-key tolerance."
+      ]
+    },
+    {
+      "para": [
+        "• ",
+        {
+          "link": {
+            "href": "README",
+            "text": "README"
+          }
+        },
+        " separates base format from local notes-system conventions."
+      ]
+    },
+    {
+      "para": [
+        "• ",
+        {
+          "link": {
+            "href": "README/metadata",
+            "text": "README/metadata"
+          }
+        },
+        ", ",
+        {
+          "link": {
+            "href": "README/workflow",
+            "text": "README/workflow"
+          }
+        },
+        ", ",
+        {
+          "link": {
+            "href": "README/orphaning",
+            "text": "README/orphaning"
+          }
+        },
+        ", and ",
+        {
+          "link": {
+            "href": "README/mcp-tools",
+            "text": "README/mcp-tools"
+          }
+        },
+        " cover the operational rules that matter in practice."
+      ]
+    },
+    {
+      "para": [
+        "• The principle of convention documents over spec changes is sound: JSONHTL stays small while this notes system can grow around it."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Gaps"
+      }
+    },
+    {
+      "para": [
+        "• The base spec defines ",
+        {
+          "code": "codeblock.lang"
+        },
+        " and ",
+        {
+          "code": "codeblock.body"
+        },
+        ". Older notes have used aliases such as ",
+        {
+          "code": "language"
+        },
+        " and ",
+        {
+          "code": "text"
+        },
+        ". A linter should catch or normalize these system-wide."
+      ]
+    },
+    {
+      "para": [
+        "• A ",
+        {
+          "code": "list"
+        },
+        " block appears in existing notes, but ",
+        {
+          "link": {
+            "href": "JSONHTL_SPEC",
+            "text": "JSONHTL_SPEC"
+          }
+        },
+        " does not define a standard list block. Either document it as an extension or convert notes to paragraph-based bullets."
+      ]
+    },
+    {
+      "para": [
+        "• Tables are used and supported by MCP ",
+        {
+          "code": "table_op"
+        },
+        ", but table block syntax is not documented in the base spec or a linked extension note."
+      ]
+    },
+    {
+      "para": [
+        "• Runnable document fields are documented separately, but there is no single registry of JSONHTL extensions used by this store."
+      ]
+    },
+    {
+      "para": [
+        "• Error handling and renderer behaviour for malformed or unknown blocks are not specified beyond the general unknown-key tolerance rule."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Recommended Improvements"
+      }
+    },
+    {
+      "para": [
+        "• Create a JSONHTL extension registry note, e.g. ",
+        {
+          "code": "README/jsonhtl-extensions"
+        },
+        " or ",
+        {
+          "code": "JSONHTL_EXTENSIONS"
+        },
+        "."
+      ]
+    },
+    {
+      "para": [
+        "• Document supported extension blocks and fields: ",
+        {
+          "code": "list"
+        },
+        ", ",
+        {
+          "code": "table"
+        },
+        ", runnable codeblock fields, and any renderer-tolerated aliases."
+      ]
+    },
+    {
+      "para": [
+        "• Add linter checks for canonical codeblock fields, missing metadata, unsupported blocks, malformed inline elements, orphaned links, and table shape errors."
+      ]
+    },
+    {
+      "para": [
+        "• Add examples of canonical and tolerated shorthand forms so implementers can normalize consistently."
+      ]
+    }
+  ]
+}

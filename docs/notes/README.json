@@ -1,0 +1,266 @@
+{
+  "title": "README — Convention Guide",
+  "version": 17,
+  "updated": "2026-10-06",
+  "content": [
+    {
+      "heading": {
+        "level": 1,
+        "text": "Convention Guide"
+      }
+    },
+    {
+      "para": [
+        "For a new MCP connection, the first operation should be ",
+        {
+          "code": "get(key='README')"
+        },
+        ". This README is the canonical documentation entry point; follow its links for detailed guidance instead of relying on the small connection bootstrap."
+      ]
+    },
+    {
+      "para": [
+        "This document is the short entry point for the public notes-store conventions. Follow links for detailed rules rather than expanding this page."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Start Here"
+      }
+    },
+    {
+      "para": [
+        "• ",
+        {
+          "link": {
+            "href": "README/format",
+            "text": "Format Details"
+          }
+        },
+        " — JSONHTL block and inline syntax."
+      ]
+    },
+    {
+      "para": [
+        "• ",
+        {
+          "link": {
+            "href": "README/workflow",
+            "text": "Workflow - Creating and Updating Notes"
+          }
+        },
+        " — how to plan, create, link, and update notes without partial states."
+      ]
+    },
+    {
+      "para": [
+        "• ",
+        {
+          "link": {
+            "href": "README/orphaning",
+            "text": "Avoiding Orphaned Notes and Information Loss"
+          }
+        },
+        " — preserve discoverability, metadata, and index links."
+      ]
+    },
+    {
+      "para": [
+        "• ",
+        {
+          "link": {
+            "href": "README/link-curation",
+            "text": "Link Curation"
+          }
+        },
+        " — recurring, proportionate maintenance for useful navigation and removal of genuine cruft."
+      ]
+    },
+    {
+      "para": [
+        "Connector index (what each MCP server actually exposes — including ",
+        {
+          "code": "misc"
+        },
+        ", whose name doesn't say what it does) is at ",
+        {
+          "link": {
+            "href": "plugins",
+            "text": "plugins"
+          }
+        },
+        "."
+      ]
+    },
+    {
+      "para": [
+        "• ",
+        {
+          "link": {
+            "href": "README/mcp-tools",
+            "text": "MCP Tools"
+          }
+        },
+        " — MCP tools and safe edit strategy for agents."
+      ]
+    },
+    {
+      "para": [
+        "• ",
+        {
+          "link": {
+            "href": "README/metadata",
+            "text": "Metadata Conventions"
+          }
+        },
+        " — standard top-level fields and visible routing guidance."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Core Rules"
+      }
+    },
+    {
+      "para": [
+        "• Read before writing. Preserve existing links, metadata, and domain-specific fields."
+      ]
+    },
+    {
+      "para": [
+        "• When creating a script or program, its usage message (",
+        {
+          "code": "--help"
+        },
+        "/usage text) should point to its extended documentation note in this system — give the note key so anyone running ",
+        {
+          "code": "--help"
+        },
+        " knows where to find fuller docs."
+      ]
+    },
+    {
+      "para": [
+        "• Create complete child notes first, then link them from their parent and any relevant index."
+      ]
+    },
+    {
+      "para": [
+        "• Increment ",
+        {
+          "code": "version"
+        },
+        " and set ",
+        {
+          "code": "updated"
+        },
+        " when changing content."
+      ]
+    },
+    {
+      "para": [
+        "• Prefer focused notes over large multi-topic documents. Once a topic reaches three or more related notes, promote one to a hub carrying a compact mind map of the thread — see ",
+        {
+          "link": {
+            "href": "README/workflow",
+            "text": "Hubs and Mind Maps"
+          }
+        },
+        ". Use it where it earns its keep, not by default."
+      ]
+    },
+    {
+      "para": [
+        "• For MCP edits, read ",
+        {
+          "link": {
+            "href": "README/mcp-note-editing",
+            "text": "MCP Note Editing Guide"
+          }
+        },
+        " before multi-block or structural changes."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Tooling"
+      }
+    },
+    {
+      "para": [
+        "Tooling documentation starts at ",
+        {
+          "link": {
+            "href": "README/tools",
+            "text": "README/tools"
+          }
+        },
+        ". Command-line usage is in ",
+        {
+          "link": {
+            "href": "README/command-line-tools",
+            "text": "README/command-line-tools"
+          }
+        },
+        "; MCP usage for agents is in ",
+        {
+          "link": {
+            "href": "README/mcp-tools",
+            "text": "README/mcp-tools"
+          }
+        },
+        "."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Agent Working Practices"
+      }
+    },
+    {
+      "para": [
+        "Agent process rules live in ",
+        {
+          "link": {
+            "href": "README/agent",
+            "text": "Agent Working Practices"
+          }
+        },
+        ". Read ",
+        {
+          "link": {
+            "href": "TRIGGERS",
+            "text": "TRIGGERS"
+          }
+        },
+        " to decide which rule notes apply to a task."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Private Store"
+      }
+    },
+    {
+      "para": [
+        "Private information — including all db.com work and any other sensitive content — belongs in the private notes store, not here. CLI users: connect to the private store at https://www.critchley.biz/private/mcp (MCP: internal 8123, stunnel 18123; REST/HTML: internal 8120, stunnel 18121)."
+      ]
+    },
+    {
+      "para": [
+        {
+          "link": {
+            "href": "README/jsonhtl-extensions",
+            "text": "Registered JSONHTL extensions"
+          }
+        },
+        " — list/table/bold/runnable grammar, examples, canonical aliases, consumer compatibility, and linting."
+      ]
+    }
+  ]
+}
