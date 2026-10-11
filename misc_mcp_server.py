@@ -43,6 +43,7 @@ from starlette.routing import Mount, Route
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gdata_oauth
+import misc_webdav
 
 logging.basicConfig(
     level=os.getenv('LOG_LEVEL', 'INFO'),
@@ -327,7 +328,7 @@ def make_rest_app(rest_port: int = 8220, store_name: str = 'misc') -> fastapi.Fa
 
 
 def _make_tool_server(store_name: str = 'misc') -> Server:
-    server = Server('misc')
+    server = Server('misc', version='1.27.2')
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
@@ -406,6 +407,13 @@ def _make_tool_server(store_name: str = 'misc') -> Server:
                 },
             ),
         ]
+        tools.append(types.Tool(
+            name='webdav',
+            description=('Read/write files, list collections, copy/move/delete, edit properties and locks '
+                         'on webdav.critchley.biz using the server user\'s .netrc. '
+                         'Usage notes: misc-server/webdav (public notes store)'),
+            inputSchema=misc_webdav.TOOL_SCHEMA,
+        ))
         prefix = f'[{store_name} store] '
         for t in tools:
             t.description = prefix + t.description
@@ -413,6 +421,8 @@ def _make_tool_server(store_name: str = 'misc') -> Server:
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[types.ContentBlock]:
+        if name == 'webdav':
+            return [types.TextContent(type='text', text=await misc_webdav.call(arguments))]
         if name == 'hello':
             return [types.TextContent(type='text', text='hello')]
         if name == 'pg_query':
