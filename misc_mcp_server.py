@@ -26,9 +26,14 @@ import contextlib
 import datetime
 import json
 import logging
-import os
 import re
+import os
 import sys
+import smtplib
+from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
+from email.parser import BytesParser
+from email import policy
 
 import asyncpg
 import fastapi
@@ -42,8 +47,18 @@ from starlette.requests import Request
 from starlette.routing import Mount, Route
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import gdata_oauth
 import misc_webdav
+from mcp_tool_plugins import discover_tools
+
+# Import IMAP client (local copy in gdata-server)
+try:
+    from imap_client import IMAPClient
+except ImportError as e:
+    IMAPClient = None
+    logger = logging.getLogger(__name__)
+    logger.error(f"Could not import IMAPClient: {e}")
 
 logging.basicConfig(
     level=os.getenv('LOG_LEVEL', 'INFO'),
@@ -51,12 +66,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PG_DSN = 'postgresql://owntracks_ro@/owntracks'
+PG_LOGINS = ('owntracks_ro', 'owntracks_rw', 'owntracks_adm')
 
-# Module-level pool shared across all tool handlers.
-_pool: asyncpg.Pool | None = None
-
-_SELECT_RE = re.compile(r'^\s*(?:--[^\n]*\n|\s)*select\b', re.IGNORECASE)
+# Separate connections keep each request under its selected database identity.
+_pools: dict[str, asyncpg.Pool] = {}
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -83,25 +96,196 @@ def _row_to_dict(record: asyncpg.Record) -> dict:
     return {k: _serialise_value(v) for k, v in dict(record).items()}
 
 
-async def _pg_query(sql: str) -> str:
-    """Run a SELECT and return JSON string, or an error message."""
-    if not _SELECT_RE.match(sql):
-        return 'Only SELECT statements are permitted.'
+def _email_send_sync(to: str, subject: str, body: str, headers: dict = None) -> str:
+    """Send an email via WebDAV delivery."""
+    try:
+        import io
+        import netrc
+        import time
+        import zlib
+        import webdav4.client
 
-    if _pool is None:
+        msg = EmailMessage()
+        msg['From'] = 'envoy@critchley.biz'
+        msg['To'] = to
+        msg['Subject'] = subject
+        msg['Date'] = formatdate(localtime=True)
+        msg['Message-ID'] = make_msgid(domain='critchley.biz')
+
+        # Add custom headers if provided
+        if headers and isinstance(headers, dict):
+            for key, value in headers.items():
+                if key not in ('From', 'To', 'Subject', 'Date', 'Message-ID'):
+                    msg[key] = str(value)
+
+        msg.set_content(body)
+        raw_msg = msg.as_bytes()
+
+        # Connect to WebDAV and deliver
+        user, _, password = netrc.netrc().authenticators('webdav.critchley.biz')
+        client = webdav4.client.Client('https://webdav.critchley.biz/mail/envoy',
+                                       auth=(user, password))
+
+        # Generate filename: E-<timestamp_us>-<crc>.eml
+        timestamp_us = int(time.time() * 1_000_000)
+        extra = f"{subject}{to}".encode('utf-8')
+        crc = zlib.crc32(extra) & 0xffffffff
+        filename = f"E-{timestamp_us}-{crc:08x}.eml"
+
+        # Upload to new/ directory
+        client.upload_fileobj(io.BytesIO(raw_msg), f'new/{filename}')
+
+        return json.dumps({
+            'status': 'sent',
+            'to': to,
+            'subject': subject,
+            'message_id': msg['Message-ID']
+        })
+    except Exception as e:
+        logger.error(f"Failed to send email: {e}")
+        return json.dumps({'status': 'error', 'error': str(e)})
+
+
+def _email_list_sync(folder: str = 'INBOX', search_criteria: str = 'ALL', max_results: int = 10) -> str:
+    """List emails in a mailbox folder."""
+    try:
+        with IMAPClient('mail.critchley.biz') as client:
+            client.select_folder(folder, readonly=True)
+            email_ids = client.search(search_criteria)
+
+            emails = []
+            for seq_id in email_ids[-max_results:]:
+                try:
+                    status, data = client.connection.fetch(seq_id, '(UID FLAGS BODY.PEEK[HEADER])')
+                    if status == 'OK' and data:
+                        flags_str = data[0][0].decode('utf-8', errors='replace')
+                        header_bytes = data[0][1]
+
+                        # Parse headers
+                        parser = BytesParser(policy=policy.default)
+                        msg = parser.parsebytes(header_bytes)
+
+                        emails.append({
+                            'seq': seq_id.decode('ascii') if isinstance(seq_id, bytes) else str(seq_id),
+                            'uid': (re.search(r'\bUID (\d+)', flags_str).group(1) if re.search(r'\bUID (\d+)', flags_str) else None),
+                            'from': msg.get('From', ''),
+                            'to': msg.get('To', ''),
+                            'subject': msg.get('Subject', ''),
+                            'date': msg.get('Date', ''),
+                            'message_id': msg.get('Message-ID', ''),
+                            'flags': flags_str
+                        })
+                except Exception as e:
+                    logger.warning(f"Error parsing email {seq_id}: {e}")
+
+            return json.dumps({
+                'folder': folder,
+                'count': len(emails),
+                'emails': emails
+            })
+    except Exception as e:
+        logger.error(f"Failed to list emails: {e}")
+        return json.dumps({'status': 'error', 'error': str(e)})
+
+
+def _email_read_sync(folder: str = 'INBOX', seq_id: str = None, uid: str = None) -> str:
+    """Read full email including body from mailbox."""
+    try:
+        with IMAPClient('mail.critchley.biz') as client:
+            client.select_folder(folder, readonly=True)
+
+            if not seq_id and not uid:
+                return json.dumps({'status': 'error', 'error': 'uid or seq_id required'})
+
+            if uid:
+                status, data = client.connection.uid('FETCH', uid, '(FLAGS BODY.PEEK[])')
+            else:
+                status, data = client.connection.fetch(seq_id, '(FLAGS BODY.PEEK[])')
+            if status != 'OK' or not data:
+                return json.dumps({'status': 'error', 'error': f'Email {seq_id} not found'})
+
+            flags_str = data[0][0].decode('utf-8', errors='replace')
+            email_bytes = data[0][1]
+
+            # Parse full email
+            parser = BytesParser(policy=policy.default)
+            msg = parser.parsebytes(email_bytes)
+
+            # Extract headers as dict
+            headers = {key: msg[key] for key in msg.keys()}
+
+            # Walk nested MIME parts and honour the declared charset.
+            body = ''
+            for part in msg.walk():
+                if part.get_content_type() == 'text/plain' and part.get_content_disposition() != 'attachment':
+                    body = part.get_content()
+                    break
+            if not body and not msg.is_multipart():
+                body = msg.get_content()
+
+            return json.dumps({
+                'seq': seq_id,
+                'folder': folder,
+                'headers': headers,
+                'body': body,
+                'flags': flags_str
+            })
+    except Exception as e:
+        logger.error(f"Failed to read email: {e}")
+        return json.dumps({'status': 'error', 'error': str(e)})
+
+
+def _email_list_folders_sync() -> str:
+    """List all mailbox folders."""
+    try:
+        with IMAPClient('mail.critchley.biz') as client:
+            folders = client.list_folders()
+            return json.dumps({
+                'status': 'success',
+                'folders': folders,
+                'count': len(folders)
+            })
+    except Exception as e:
+        logger.error(f"Failed to list folders: {e}")
+        return json.dumps({'status': 'error', 'error': str(e)})
+
+
+async def _email_send(to, subject, body, headers=None):
+    return await asyncio.to_thread(_email_send_sync, to, subject, body, headers)
+
+async def _email_list(folder='INBOX', search_criteria='ALL', max_results=10):
+    if not isinstance(max_results, int) or isinstance(max_results, bool) or not 1 <= max_results <= 500:
+        return json.dumps({'status': 'error', 'error': 'max_results must be between 1 and 500'})
+    return await asyncio.to_thread(_email_list_sync, folder, search_criteria, max_results)
+
+async def _email_read(folder='INBOX', seq_id=None, uid=None):
+    return await asyncio.to_thread(_email_read_sync, folder, seq_id, uid)
+
+async def _email_list_folders():
+    return await asyncio.to_thread(_email_list_folders_sync)
+
+
+async def _pg_query(sql: str, login: str = 'owntracks_ro') -> str:
+    """Run SQL under the selected login; PostgreSQL enforces permissions."""
+    if login not in PG_LOGINS:
+        return f'Unknown database login. Choose one of: {", ".join(PG_LOGINS)}.'
+
+    pool = _pools.get(login)
+    if pool is None:
         return 'Database pool not available. Please try again.'
 
     try:
-        async with _pool.acquire() as conn:
-            rows = await conn.fetch(sql, timeout=30)
+        async with pool.acquire() as conn:
+            # Inspect before executing: falling back after execution could repeat a write.
+            statement = await conn.prepare(sql, timeout=30)
+            if not statement.get_attributes():
+                status = await conn.execute(sql, timeout=30)
+                return json.dumps({'status': status})
+            rows = await statement.fetch(timeout=30)
         result = [_row_to_dict(r) for r in rows]
-        if len(result) == 500:
-            note = f'\n[Result capped at 500 rows. Add LIMIT to your query to be explicit.]'
-        else:
-            note = ''
-        return json.dumps(result, default=str) + note
+        return json.dumps(result, default=str)
     except Exception as exc:
-        logger.warning('pg_query error: %s', exc)
+        logger.exception('pg_query error (login=%s)', login)
         return f'Query error: {exc}. Please try again.'
 
 
@@ -138,9 +322,10 @@ def _worst(statuses) -> str:
 
 async def _fetchrows(sql: str) -> list[dict]:
     """Run a SELECT via the pool and return rows as dicts (raises on error)."""
-    if _pool is None:
+    pool = _pools.get('owntracks_ro')
+    if pool is None:
         raise RuntimeError('Database pool not available.')
-    async with _pool.acquire() as conn:
+    async with pool.acquire() as conn:
         rows = await conn.fetch(sql, timeout=30)
     return [_row_to_dict(r) for r in rows]
 
@@ -328,50 +513,114 @@ def make_rest_app(rest_port: int = 8220, store_name: str = 'misc') -> fastapi.Fa
 
 
 def _make_tool_server(store_name: str = 'misc') -> Server:
-    server = Server('misc', version='1.27.2')
+    # Bump this server version whenever Misc changes; shown in MCP client setup.
+    server = Server('misc', version='1.27.3')
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
         tools = [
             types.Tool(
                 name='hello',
-                description='Say hello. Returns a greeting.',
+                description='Say hello. Returns a greeting. For overview of all misc connector services, see notes key: misc-server',
                 inputSchema={'type': 'object', 'properties': {}, 'required': []},
             ),
             types.Tool(
                 name='pg_query',
                 description=(
-                    'Execute a read-only SELECT query against the OwnTracks location database.\n\n'
-                    'Database: owntracks\n'
-                    'Table: locations\n'
-                    'Columns: id, received_at (timestamptz), tst (unix epoch bigint), '
-                    'lat (float), lon (float), geom (PostGIS geometry Point/4326), '
-                    'acc (horiz accuracy m), vac (vert accuracy m), alt (altitude m), '
-                    'batt (battery %), bs (battery status: 1=unplugged 2=charging 3=full), '
-                    'conn (w=WiFi m=mobile o=offline), ssid, bssid, '
-                    't (trigger: p=ping t=timer u=user c=circular), '
-                    'm (monitoring mode), p (pressure hPa), tid, '
-                    'motionactivities (text[]), inregions (text[]), topic\n\n'
-                    'Spatial: geom is indexed with GiST. Use ::geography for metre-accurate distance.\n'
-                    'Use ST_AsGeoJSON(geom) to return geometry as GeoJSON.\n'
-                    'Use ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(lon,lat),4326)::geography, metres) for radius search.\n'
-                    'Use ST_Distance(geom::geography, ...) for distance in metres.\n'
-                    'Use to_timestamp(tst) AT TIME ZONE \'Europe/London\' for readable local times.\n\n'
-                    'Only SELECT is permitted. Returns up to 500 rows.\n\n'
-                    'Usage notes: location-db/usage (public notes store)'
+                    'Execute SQL against OwnTracks. Read notes location-db/usage for '
+                    'parameters, permissions and examples; location-db/schema for schema.'
                 ),
                 inputSchema={
                     'type': 'object',
                     'properties': {
                         'sql': {
                             'type': 'string',
-                            'description': 'A SELECT SQL statement. PostGIS spatial functions are available.',
+                            'description': 'One SQL statement. PostGIS spatial functions are available.',
+                        },
+                        'login': {
+                            'type': 'string',
+                            'enum': list(PG_LOGINS),
+                            'default': 'owntracks_ro',
+                            'description': 'Database login whose permissions apply to this statement.',
                         },
                     },
                     'required': ['sql'],
                 },
             ),
             types.Tool(
+                name='email_send',
+                description='Send an email to the local mail server. For full documentation and testing workflows, see notes key: misc-server/email-tools',
+                inputSchema={
+                    'type': 'object',
+                    'properties': {
+                        'to': {
+                            'type': 'string',
+                            'description': 'Email recipient address',
+                        },
+                        'subject': {
+                            'type': 'string',
+                            'description': 'Email subject line',
+                        },
+                        'body': {
+                            'type': 'string',
+                            'description': 'Email body text',
+                        },
+                        'headers': {
+                            'type': 'object',
+                            'description': 'Optional additional email headers (dict). Do not include From, To, Subject, Date, Message-ID.',
+                        },
+                    },
+                    'required': ['to', 'subject', 'body'],
+                },
+            ),
+            types.Tool(
+                name='email_list',
+                description='List emails in a mailbox folder with headers. See misc-server/email-tools for examples and IMAP search syntax.',
+                inputSchema={
+                    'type': 'object',
+                    'properties': {
+                        'folder': {
+                            'type': 'string',
+                            'description': 'Mailbox folder name (default: INBOX)',
+                        },
+                        'search_criteria': {
+                            'type': 'string',
+                            'description': 'IMAP search criteria (default: ALL). E.g., UNSEEN, SEEN, FROM "address", SUBJECT "text"',
+                        },
+                        'max_results': {
+                            'type': 'integer',
+                            'description': 'Maximum number of results to return (default: 10)',
+                        },
+                    },
+                    'required': [],
+                },
+            ),
+            types.Tool(
+                name='email_read',
+                description='Read a full email including body and all headers from mailbox. See notes key misc-server/email-tools for workflow examples.',
+                inputSchema={
+                    'type': 'object',
+                    'properties': {
+                        'folder': {
+                            'type': 'string',
+                            'description': 'Mailbox folder name (default: INBOX)',
+                        },
+                        'uid': {'type': 'string', 'pattern': '^[1-9][0-9]*$', 'description': 'Stable IMAP UID from email_list'},
+                        'seq_id': {
+                            'type': 'string',
+                            'description': 'Legacy sequence ID; prefer the stable uid from email_list',
+                        },
+                    },
+                    'anyOf': [{'required': ['uid']}, {'required': ['seq_id']}],
+                },
+            ),
+            types.Tool(
+                name='email_list_folders',
+                description='List all mailbox folders available on the server. Documentation: misc-server/email-tools',
+                inputSchema={'type': 'object', 'properties': {}, 'required': []},
+            ),
+        ]
+        tools.append(types.Tool(
                 name='check',
                 description=(
                     'Health/monitoring check for the gravlax database host.\n\n'
@@ -405,15 +654,18 @@ def _make_tool_server(store_name: str = 'misc') -> Server:
                     },
                     'required': [],
                 },
-            ),
-        ]
-        tools.append(types.Tool(
-            name='webdav',
-            description=('Read/write files, list collections, copy/move/delete, edit properties and locks '
-                         'on webdav.critchley.biz using the server user\'s .netrc. '
-                         'Usage notes: misc-server/webdav (public notes store)'),
-            inputSchema=misc_webdav.TOOL_SCHEMA,
-        ))
+            ))
+        tools.append(types.Tool(name='webdav', description='Read/write WebDAV files. See notes misc-server/webdav.', inputSchema=misc_webdav.TOOL_SCHEMA))
+        plugin_names = {tool.name for tool in tools}
+        for plugin in discover_tools():
+            if plugin.name in plugin_names:
+                logger.warning('Skipping plugin tool that conflicts with built-in: %s', plugin.name)
+                continue
+            tools.append(types.Tool(
+                name=plugin.name,
+                description=plugin.description,
+                inputSchema=plugin.input_schema,
+            ))
         prefix = f'[{store_name} store] '
         for t in tools:
             t.description = prefix + t.description
@@ -423,17 +675,46 @@ def _make_tool_server(store_name: str = 'misc') -> Server:
     async def call_tool(name: str, arguments: dict) -> list[types.ContentBlock]:
         if name == 'webdav':
             return [types.TextContent(type='text', text=await misc_webdav.call(arguments))]
+        if name == 'check':
+            return [types.TextContent(type='text', text=await _run_check(arguments.get('target') or 'all'))]
         if name == 'hello':
             return [types.TextContent(type='text', text='hello')]
         if name == 'pg_query':
             sql = (arguments.get('sql') or '').strip()
             if not sql:
                 return [types.TextContent(type='text', text='sql argument is required.')]
-            result = await _pg_query(sql)
+            result = await _pg_query(sql, arguments.get('login', 'owntracks_ro'))
             return [types.TextContent(type='text', text=result)]
-        if name == 'check':
-            result = await _run_check(arguments.get('target') or 'all')
+        if name == 'email_send':
+            to = arguments.get('to', '').strip()
+            subject = arguments.get('subject', '').strip()
+            body = arguments.get('body', '')
+            headers = arguments.get('headers')
+            if not to or not subject:
+                return [types.TextContent(type='text', text='to and subject arguments are required.')]
+            result = await _email_send(to, subject, body, headers)
             return [types.TextContent(type='text', text=result)]
+        if name == 'email_list':
+            folder = arguments.get('folder', 'INBOX').strip()
+            search_criteria = arguments.get('search_criteria', 'ALL').strip()
+            max_results = int(arguments.get('max_results', 10))
+            result = await _email_list(folder, search_criteria, max_results)
+            return [types.TextContent(type='text', text=result)]
+        if name == 'email_read':
+            folder = arguments.get('folder', 'INBOX').strip()
+            seq_id = arguments.get('seq_id', '').strip()
+            uid = arguments.get('uid', '').strip()
+            if not seq_id and not uid:
+                return [types.TextContent(type='text', text='uid or seq_id argument is required.')]
+            result = await _email_read(folder, seq_id, uid) if uid else await _email_read(folder, seq_id)
+            return [types.TextContent(type='text', text=result)]
+        if name == 'email_list_folders':
+            result = await _email_list_folders()
+            return [types.TextContent(type='text', text=result)]
+        for plugin in discover_tools():
+            if plugin.name == name:
+                result = await plugin.invoke(arguments)
+                return [types.TextContent(type='text', text=result)]
         return [types.TextContent(type='text', text=f'unknown tool: {name}')]
 
     return server
@@ -483,45 +764,54 @@ def make_mcp_app(store_name: str = 'misc') -> Starlette:
 
 
 async def main():
-    global _pool
-
     gdata_oauth.startup_check()
     parser = argparse.ArgumentParser(description='misc MCP server')
     parser.add_argument('--rest-port', type=int, default=int(os.getenv('MISC_REST_PORT', 8220)))
     parser.add_argument('--mcp-port',  type=int, default=int(os.getenv('MISC_MCP_PORT',  8223)))
-    parser.add_argument('--host',      default=os.getenv('MISC_HOST', '127.0.0.1'))
+    parser.add_argument('--rest-host', default=None)
+    parser.add_argument('--mcp-host',  default=None)
+    parser.add_argument('--host',      default=None, help='(deprecated: use --rest-host and --mcp-host)')
     parser.add_argument('--name',      default=os.getenv('GDATA_STORE_NAME', 'misc'))
     args = parser.parse_args()
 
+    legacy_host = args.host or os.getenv('MISC_HOST', '127.0.0.1')
+    args.rest_host = args.rest_host or args.host or os.getenv('REST_HOST', legacy_host)
+    args.mcp_host = args.mcp_host or args.host or os.getenv('MCP_HOST', legacy_host)
+
     log_level = os.getenv('LOG_LEVEL', 'info').lower()
 
-    logger.info('Connecting to PostgreSQL pool...')
-    _pool = await asyncpg.create_pool(
-        PG_DSN,
-        min_size=1,
-        max_size=3,
-        max_inactive_connection_lifetime=300,
-        max_queries=50_000,
-        command_timeout=30,
-    )
-    logger.info('PostgreSQL pool ready.')
+    logger.info('Connecting to PostgreSQL pools...')
+    async with contextlib.AsyncExitStack() as pool_stack:
+        for login in PG_LOGINS:
+            try:
+                _pools[login] = await pool_stack.enter_async_context(asyncpg.create_pool(
+                    database='owntracks',
+                    user=login,
+                    min_size=1,
+                    max_size=3,
+                    max_inactive_connection_lifetime=300,
+                    max_queries=50_000,
+                    command_timeout=30,
+                ))
+            except Exception:
+                logger.exception('PostgreSQL pool unavailable (login=%s)', login)
+        logger.info('PostgreSQL pools ready.')
 
-    rest_app = make_rest_app(args.rest_port, args.name)
-    mcp_app  = make_mcp_app(args.name)
+        rest_app = make_rest_app(args.rest_port, args.name)
+        mcp_app  = make_mcp_app(args.name)
 
-    rest_cfg = uvicorn.Config(rest_app, host=args.host, port=args.rest_port, log_level=log_level)
-    mcp_cfg  = uvicorn.Config(mcp_app,  host=args.host, port=args.mcp_port,  log_level=log_level)
+        rest_cfg = uvicorn.Config(rest_app, host=args.rest_host, port=args.rest_port, log_level=log_level)
+        mcp_cfg  = uvicorn.Config(mcp_app,  host=args.mcp_host, port=args.mcp_port,  log_level=log_level)
 
-    logger.info(f'REST on {args.host}:{args.rest_port}  |  MCP on {args.host}:{args.mcp_port}  |  name={args.name}')
+        logger.info(f'REST on {args.rest_host}:{args.rest_port}  |  MCP on {args.mcp_host}:{args.mcp_port}  |  name={args.name}')
 
-    try:
-        await asyncio.gather(
-            uvicorn.Server(rest_cfg).serve(),
-            uvicorn.Server(mcp_cfg).serve(),
-        )
-    finally:
-        await _pool.close()
-        logger.info('PostgreSQL pool closed.')
+        try:
+            await asyncio.gather(
+                uvicorn.Server(rest_cfg).serve(),
+                uvicorn.Server(mcp_cfg).serve(),
+            )
+        finally:
+            _pools.clear()
 
 
 if __name__ == '__main__':
