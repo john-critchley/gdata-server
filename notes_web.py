@@ -289,7 +289,7 @@ def _render_image(im) -> str:
     return f'<figure>{img}</figure>'
 
 
-def _render_details(d) -> str:
+def _render_details(d, level=2) -> str:
     """Render a details block as native <details>/<summary> — collapsed by
     default, expandable per-item with zero JavaScript (browser-native), and
     see _render_page for the pure-CSS "expand all" control.
@@ -297,7 +297,7 @@ def _render_details(d) -> str:
     if not isinstance(d, dict):
         return ''
     summary = _html.escape(str(d.get('summary', '') or ''))
-    nested = _render_content(d.get('content', []))
+    nested = _render_content(d.get('content', []), level=level)
     return f'<details><summary>{summary}</summary>{nested}</details>'
 
 
@@ -367,7 +367,8 @@ def _render_block(block, level: int = 2) -> str:
                     row_style = f' style="background-color: {colour};"'
             tds = ''.join(f'<td>{_render_cell(cell)}</td>' for cell in row)
             trs += f'<tr{row_style}>{tds}</tr>'
-        return f'<table class="bks"><thead><tr>{ths}</tr></thead><tbody>{trs}</tbody></table>'
+        caption = f'<caption>{_html.escape(str(t["caption"]))}</caption>' if t.get("caption") else ""
+        return f'<table class="bks">{caption}<thead><tr>{ths}</tr></thead><tbody>{trs}</tbody></table>'
 
     if 'list' in block:
         lst = block['list']
@@ -390,7 +391,7 @@ def _render_block(block, level: int = 2) -> str:
         return _render_image(block['image'])
 
     if 'details' in block:
-        return _render_details(block['details'])
+        return _render_details(block['details'], level=level)
 
     if 'writable_note' in block:
         return _render_writable_note(block['writable_note'])

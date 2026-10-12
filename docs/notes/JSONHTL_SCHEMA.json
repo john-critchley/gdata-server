@@ -1,0 +1,144 @@
+{
+  "title": "JSONHTL JSON Schema (Draft-07)",
+  "version": 6,
+  "updated": "2026-10-06",
+  "content": [
+    {
+      "heading": {
+        "level": 1,
+        "text": "JSONHTL JSON Schema (Draft-07)"
+      }
+    },
+    {
+      "para": [
+        "Machine-readable JSON Schema (Draft-07) for JSONHTL documents. The linter reads this note and extracts the schema from the codeblock below to validate documents dynamically."
+      ]
+    },
+    {
+      "para": [
+        "Human-readable linter specification: ",
+        {
+          "link": {
+            "href": "gdata-server/linter",
+            "text": "gdata-server/linter"
+          }
+        },
+        ". Base format: ",
+        {
+          "link": {
+            "href": "JSONHTL_SPEC",
+            "text": "JSONHTL_SPEC"
+          }
+        },
+        ". Extensions: ",
+        {
+          "link": {
+            "href": "README/format",
+            "text": "README/format"
+          }
+        },
+        "."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Sync Rule"
+      }
+    },
+    {
+      "para": [
+        "This note and ",
+        {
+          "link": {
+            "href": "gdata-server/linter",
+            "text": "gdata-server/linter"
+          }
+        },
+        " must be kept in sync for structural changes. Semantic-only changes (e.g. updating a description field) do not require updates to the other. When in doubt, update both and note what changed."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Schema"
+      }
+    },
+    {
+      "para": [
+        "The linter fetches this note by key ",
+        {
+          "code": "JSONHTL_SCHEMA"
+        },
+        " and uses the first codeblock with ",
+        {
+          "code": "lang: json"
+        },
+        " as the schema."
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\n  \"$schema\": \"http://json-schema.org/draft-07/schema#\",\n  \"title\": \"JSONHTL Document\",\n  \"description\": \"Machine-readable schema for JSONHTL documents. Canonical note: JSONHTL_SCHEMA. Text spec: gdata-server/linter.\",\n  \"type\": \"object\",\n  \"required\": [\n    \"content\"\n  ],\n  \"additionalProperties\": true,\n  \"properties\": {\n    \"title\": {\n      \"type\": \"string\"\n    },\n    \"version\": {\n      \"oneOf\": [\n        {\n          \"type\": \"integer\"\n        },\n        {\n          \"type\": \"string\"\n        }\n      ]\n    },\n    \"updated\": {\n      \"type\": \"string\",\n      \"pattern\": \"^\\\\d{4}-\\\\d{2}-\\\\d{2}$\"\n    },\n    \"created\": {\n      \"type\": \"string\",\n      \"pattern\": \"^\\\\d{4}-\\\\d{2}-\\\\d{2}$\"\n    },\n    \"tags\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      }\n    },\n    \"runnable\": {\n      \"type\": \"boolean\"\n    },\n    \"content\": {\n      \"oneOf\": [\n        {\n          \"type\": \"string\"\n        },\n        {\n          \"type\": \"array\",\n          \"items\": {\n            \"$ref\": \"#/definitions/block\"\n          }\n        }\n      ]\n    }\n  },\n  \"definitions\": {\n    \"inline_link\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"link\"\n      ],\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"link\": {\n          \"type\": \"object\",\n          \"required\": [\n            \"href\",\n            \"text\"\n          ],\n          \"additionalProperties\": false,\n          \"properties\": {\n            \"href\": {\n              \"type\": \"string\"\n            },\n            \"text\": {\n              \"type\": \"string\"\n            }\n          }\n        }\n      }\n    },\n    \"inline_code\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"code\"\n      ],\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"code\": {\n          \"type\": \"string\"\n        }\n      }\n    },\n    \"inline_bold\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"bold\"\n      ],\n      \"additionalProperties\": false,\n      \"description\": \"Registered extension. Both renderers support it; not in JSONHTL_SPEC base.\",\n      \"properties\": {\n        \"bold\": {\n          \"type\": \"string\"\n        }\n      }\n    },\n    \"inline_element\": {\n      \"oneOf\": [\n        {\n          \"type\": \"string\"\n        },\n        {\n          \"$ref\": \"#/definitions/inline_link\"\n        },\n        {\n          \"$ref\": \"#/definitions/inline_code\"\n        },\n        {\n          \"$ref\": \"#/definitions/inline_bold\"\n        },\n        {\n          \"$ref\": \"#/definitions/inline_strong\"\n        },\n        {\n          \"$ref\": \"#/definitions/inline_em\"\n        },\n        {\n          \"$ref\": \"#/definitions/inline_italic\"\n        }\n      ]\n    },\n    \"para_content\": {\n      \"oneOf\": [\n        {\n          \"type\": \"string\"\n        },\n        {\n          \"type\": \"array\",\n          \"items\": {\n            \"$ref\": \"#/definitions/inline_element\"\n          }\n        }\n      ]\n    },\n    \"table_cell\": {\n      \"description\": \"A table cell is a string or an inline-element list (same content model as para), so links and other inline objects are valid in cells.\",\n      \"oneOf\": [\n        {\n          \"type\": \"string\"\n        },\n        {\n          \"type\": \"array\",\n          \"items\": {\n            \"$ref\": \"#/definitions/inline_element\"\n          }\n        }\n      ]\n    },\n    \"block_para\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"para\"\n      ],\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"para\": {\n          \"$ref\": \"#/definitions/para_content\"\n        }\n      }\n    },\n    \"block_heading\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"heading\"\n      ],\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"heading\": {\n          \"type\": \"object\",\n          \"required\": [\n            \"level\",\n            \"text\"\n          ],\n          \"additionalProperties\": false,\n          \"properties\": {\n            \"level\": {\n              \"type\": \"integer\",\n              \"minimum\": 1,\n              \"maximum\": 6\n            },\n            \"text\": {\n              \"type\": \"string\"\n            }\n          }\n        }\n      }\n    },\n    \"block_codeblock\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"codeblock\"\n      ],\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"codeblock\": {\n          \"type\": \"object\",\n          \"required\": [\n            \"lang\",\n            \"body\"\n          ],\n          \"additionalProperties\": false,\n          \"properties\": {\n            \"lang\": {\n              \"type\": \"string\"\n            },\n            \"body\": {\n              \"type\": \"string\"\n            },\n            \"exec\": {\n              \"type\": \"boolean\",\n              \"description\": \"Runnable extension. Only valid when document has runnable: true.\"\n            },\n            \"name\": {\n              \"type\": \"string\",\n              \"description\": \"Runnable extension. Must be unique within document. Only valid when runnable: true.\"\n            }\n          }\n        }\n      }\n    },\n    \"block_list\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"list\"\n      ],\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"list\": {\n          \"type\": \"object\",\n          \"required\": [\n            \"items\"\n          ],\n          \"additionalProperties\": false,\n          \"properties\": {\n            \"label\": {\n              \"type\": \"string\"\n            },\n            \"ordered\": {\n              \"type\": \"boolean\"\n            },\n            \"items\": {\n              \"type\": \"array\",\n              \"items\": {\n                \"oneOf\": [\n                  {\n                    \"type\": \"string\"\n                  },\n                  {\n                    \"type\": \"array\",\n                    \"items\": {\n                      \"$ref\": \"#/definitions/inline_element\"\n                    }\n                  },\n                  {\n                    \"type\": \"object\"\n                  }\n                ]\n              }\n            }\n          }\n        }\n      }\n    },\n    \"block_table\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"table\"\n      ],\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"table\": {\n          \"type\": \"object\",\n          \"required\": [\n            \"columns\",\n            \"rows\"\n          ],\n          \"additionalProperties\": false,\n          \"properties\": {\n            \"columns\": {\n              \"type\": \"array\",\n              \"items\": {\n                \"type\": \"string\"\n              }\n            },\n            \"rows\": {\n              \"type\": \"array\",\n              \"items\": {\n                \"type\": \"array\",\n                \"items\": {\n                  \"$ref\": \"#/definitions/table_cell\"\n                }\n              }\n            },\n            \"caption\": {\n              \"type\": \"string\"\n            }\n          }\n        }\n      }\n    },\n    \"block_image\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"image\"\n      ],\n      \"additionalProperties\": false,\n      \"description\": \"Spec-base block (JSONHTL_SPEC, added 2026-07-17). Raster image; data is base64.\",\n      \"properties\": {\n        \"image\": {\n          \"type\": \"object\",\n          \"required\": [\n            \"format\",\n            \"data\"\n          ],\n          \"additionalProperties\": false,\n          \"properties\": {\n            \"format\": {\n              \"type\": \"string\"\n            },\n            \"data\": {\n              \"type\": \"string\"\n            },\n            \"alt\": {\n              \"type\": \"string\"\n            },\n            \"caption\": {\n              \"type\": \"string\"\n            }\n          }\n        }\n      }\n    },\n    \"block_svg\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"svg\"\n      ],\n      \"additionalProperties\": false,\n      \"description\": \"Spec-base block (JSONHTL_SPEC, added 2026-07-17). Inline vector diagram; body is raw SVG XML (text, not base64).\",\n      \"properties\": {\n        \"svg\": {\n          \"type\": \"object\",\n          \"required\": [\n            \"body\"\n          ],\n          \"additionalProperties\": false,\n          \"properties\": {\n            \"body\": {\n              \"type\": \"string\"\n            },\n            \"alt\": {\n              \"type\": \"string\"\n            },\n            \"caption\": {\n              \"type\": \"string\"\n            }\n          }\n        }\n      }\n    },\n    \"block_details\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"details\"\n      ],\n      \"additionalProperties\": false,\n      \"description\": \"Spec-base block (JSONHTL_SPEC, added 2026-07-17). Collapsible section; content is nested blocks.\",\n      \"properties\": {\n        \"details\": {\n          \"type\": \"object\",\n          \"required\": [\n            \"summary\",\n            \"content\"\n          ],\n          \"additionalProperties\": false,\n          \"properties\": {\n            \"summary\": {\n              \"type\": \"string\"\n            },\n            \"content\": {\n              \"type\": \"array\",\n              \"items\": {\n                \"$ref\": \"#/definitions/block\"\n              }\n            }\n          }\n        }\n      }\n    },\n    \"block_section\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"section\"\n      ],\n      \"additionalProperties\": false,\n      \"description\": \"Nested section container (proposal: proposals/section-editing). title is the heading text; level is optional (defaults to nesting depth); content is a recursive block list. Coexists with the legacy flat heading block during migration.\",\n      \"properties\": {\n        \"section\": {\n          \"type\": \"object\",\n          \"required\": [\n            \"title\",\n            \"content\"\n          ],\n          \"additionalProperties\": false,\n          \"properties\": {\n            \"title\": {\n              \"type\": \"string\"\n            },\n            \"level\": {\n              \"type\": \"integer\",\n              \"minimum\": 1,\n              \"maximum\": 6\n            },\n            \"content\": {\n              \"type\": \"array\",\n              \"items\": {\n                \"$ref\": \"#/definitions/block\"\n              }\n            }\n          }\n        }\n      }\n    },\n    \"block\": {\n      \"oneOf\": [\n        {\n          \"$ref\": \"#/definitions/block_para\"\n        },\n        {\n          \"$ref\": \"#/definitions/block_heading\"\n        },\n        {\n          \"$ref\": \"#/definitions/block_codeblock\"\n        },\n        {\n          \"$ref\": \"#/definitions/block_list\"\n        },\n        {\n          \"$ref\": \"#/definitions/block_table\"\n        },\n        {\n          \"$ref\": \"#/definitions/block_image\"\n        },\n        {\n          \"$ref\": \"#/definitions/block_svg\"\n        },\n        {\n          \"$ref\": \"#/definitions/block_details\"\n        },\n        {\n          \"$ref\": \"#/definitions/block_section\"\n        }\n      ]\n    },\n    \"inline_strong\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"strong\"\n      ],\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"strong\": {\n          \"type\": \"string\"\n        }\n      }\n    },\n    \"inline_em\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"em\"\n      ],\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"em\": {\n          \"type\": \"string\"\n        }\n      }\n    },\n    \"inline_italic\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"italic\"\n      ],\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"italic\": {\n          \"type\": \"string\"\n        }\n      }\n    }\n  }\n}"
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Registered Extensions"
+      }
+    },
+    {
+      "para": [
+        "These are not in the JSONHTL_SPEC base but are registered here as supported extensions:"
+      ]
+    },
+    {
+      "list": {
+        "items": [
+          "bold inline -- both renderers support it",
+          "list block -- documented in README/format; both renderers",
+          "table block -- documented in README/format; both renderers",
+          "codeblock exec and name fields -- runnable sheets; documented in README/runnable"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Unregistered (flag as unknown)"
+      }
+    },
+    {
+      "para": [
+        "These appear in renderer code but are not registered. The linter should flag them as unknown block types:"
+      ]
+    },
+    {
+      "list": {
+        "items": [
+          "bullet_list -- notes_web.py only; undocumented",
+          "writable_note -- notes_web.py only; application-specific"
+        ]
+      }
+    },
+    {
+      "para": [
+        "Extension registry and consumer compatibility: ",
+        {
+          "link": {
+            "href": "README/jsonhtl-extensions",
+            "text": "README/jsonhtl-extensions"
+          }
+        },
+        ". Reconciled 2026-10-06: optional table.caption; string or integer version metadata; list items typed as text, inline arrays or compatibility objects. Offline schema mirror: jsonhtl_schema.json in gdata-server."
+      ]
+    },
+    {
+      "para": [
+        "strong is a registered alias of bold; em and italic are registered emphasis forms. All take string values and are valid in every inline context."
+      ]
+    }
+  ]
+}

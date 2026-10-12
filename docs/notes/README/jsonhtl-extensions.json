@@ -1,0 +1,161 @@
+{
+  "title": "JSONHTL — Notes-store extensions and compatibility",
+  "version": 2,
+  "created": "2026-10-06",
+  "updated": "2026-10-06",
+  "tags": [
+    "jsonhtl",
+    "reference",
+    "extensions"
+  ],
+  "content": [
+    {
+      "heading": {
+        "level": 1,
+        "text": "JSONHTL extensions and compatibility"
+      }
+    },
+    {
+      "para": [
+        "Parent: ",
+        {
+          "link": {
+            "href": "README",
+            "text": "README"
+          }
+        },
+        ". Base grammar: ",
+        {
+          "link": {
+            "href": "JSONHTL_SPEC",
+            "text": "JSONHTL_SPEC"
+          }
+        },
+        ". Machine validation: ",
+        {
+          "link": {
+            "href": "JSONHTL_SCHEMA",
+            "text": "JSONHTL_SCHEMA"
+          }
+        },
+        "."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Registered content extensions"
+      }
+    },
+    {
+      "para": [
+        "list: {items: [...], ordered?: boolean, label?: string}. Canonical items are plain strings or arrays of inline elements. Compatibility forms include a single inline object, {para: inline-content}, and key/value record objects rendered as labelled fields. A bare array at block level is invalid."
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\n  \"list\": {\n    \"ordered\": true,\n    \"items\": [\n      \"First step\",\n      [\n        \"Read \",\n        {\n          \"link\": {\n            \"href\": \"README\",\n            \"text\": \"the guide\"\n          }\n        }\n      ]\n    ]\n  }\n}"
+      }
+    },
+    {
+      "para": [
+        "table: {columns: [string, ...], rows: [[cell, ...], ...], caption?: string}. Each row has exactly as many cells as columns. A cell is a plain string or an array of inline elements, using the same grammar as a paragraph. Structured links must render as links rather than stringified objects. Numeric values in older notes are display-tolerated but should be written as strings."
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "json",
+        "body": "{\n  \"table\": {\n    \"columns\": [\n      \"Reference\"\n    ],\n    \"rows\": [\n      [\n        [\n          {\n            \"link\": {\n              \"href\": \"README\",\n              \"text\": \"Guide\"\n            }\n          },\n          {\n            \"bold\": \" recommended\"\n          }\n        ]\n      ]\n    ],\n    \"caption\": \"Useful references\"\n  }\n}"
+      }
+    },
+    {
+      "para": [
+        "bold/strong: string-valued bold emphasis. em/italic: string-valued italic emphasis. All four are registered inline forms in paragraphs, list inline arrays and table cells."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Runnable documents"
+      }
+    },
+    {
+      "para": [
+        "runnable: true enables codeblock.exec (boolean) and codeblock.name (string, unique across the entire document, including nested sections/details). Ordinary renderers display code and never execute it. Execution behaviour belongs to the Notes Browser; see ",
+        {
+          "link": {
+            "href": "README/runnable",
+            "text": "README/runnable"
+          }
+        },
+        "."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Canonical syntax and compatibility"
+      }
+    },
+    {
+      "para": [
+        "Write codeblock.lang and codeblock.body. Older language/text aliases are retained only by compatibility renderers that already accepted them; the linter reports them and new producers must use canonical fields. Canonical fields take precedence when both are supplied. No corpus-wide automatic alias rewrite is performed."
+      ]
+    },
+    {
+      "para": [
+        "Unknown blocks and inline elements are skipped by base consumers; schema validation reports them as unsupported. Malformed known elements are validation errors: validate before rendering rather than rely on renderer-specific recovery. Unknown top-level metadata is allowed by the base format."
+      ]
+    },
+    {
+      "para": [
+        "bullet_list and writable_note remain application-specific, unregistered blocks. The web viewer's legacy support is not a promise of portable behaviour; use list for portable lists."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Consumer support"
+      }
+    },
+    {
+      "para": [
+        "Web renderer (notes_web.py), both gdata desktop viewers, shared Envoy JSONHTLRenderer, and its static exporter support section, list, table, bold, image, svg and details. Nested section levels default to 2 at document root (below the document title) and parent effective level + 1, capped at 6; details is transparent to section depth."
+      ]
+    },
+    {
+      "para": [
+        "Web/static details is browser-native and collapsible. wx.html desktop consumers expose its summary and content expanded; native collapse widgets remain separate UI work. The gdata desktop viewers rasterise SVG and decode raster images. The shared HTML renderer outputs image data URIs for browser display."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Linting"
+      }
+    },
+    {
+      "codeblock": {
+        "lang": "bash",
+        "body": "python3 lint_jsonhtl.py --key README\npython3 lint_jsonhtl.py --file document.json --schema jsonhtl_schema.json\npython3 lint_jsonhtl.py --all --metadata --links"
+      }
+    },
+    {
+      "para": [
+        "The linter reads the live JSONHTL_SCHEMA by default; --schema accepts an offline copy. It checks nested blocks, aliases, runnable fields/names, table widths, and optionally notes-store metadata and internal hrefs. --links checks against the public key listing: references to private notes require manual classification, and unresolved hrefs are not proof that a note is orphaned."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Coordinated changes"
+      }
+    },
+    {
+      "para": [
+        "Any future format change must update spec/registry, schema, linter, web renderer, desktop viewers, shared renderer/exporter, and compatibility tests together. Preserve existing notes; document producer rules and deliberate consumer fallbacks."
+      ]
+    }
+  ]
+}

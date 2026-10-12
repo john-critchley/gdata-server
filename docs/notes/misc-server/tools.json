@@ -1,0 +1,179 @@
+{
+  "title": "Misc MCP Server — Tools Index",
+  "content": [
+    {
+      "heading": {
+        "level": 1,
+        "text": "Misc Connector Tools"
+      }
+    },
+    {
+      "para": [
+        "All tools available in the misc MCP connector. Each tool description includes a notes key for detailed documentation."
+      ]
+    },
+    {
+      "para": [
+        "Architecture and deployment: ",
+        {
+          "link": {
+            "href": "misc-server",
+            "text": "misc-server"
+          }
+        }
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "hello"
+      }
+    },
+    {
+      "para": [
+        "Returns the string \"hello\". Placeholder tool — demonstrates the server is working and connected. No arguments. Points to main misc-server documentation."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "pg_query"
+      }
+    },
+    {
+      "para": [
+        "Executes one SQL statement against the OwnTracks database on gravlax. Optional login defaults to owntracks_ro; owntracks_rw enables writes and owntracks_adm adds CREATE and permitted ALTER operations. PostgreSQL enforces privileges. Returns JSON row arrays or command status. Use an explicit LIMIT; no 500-row cap is enforced."
+      ]
+    },
+    {
+      "para": [
+        "Architecture: one asyncpg pool per login (min=1, max=3 each), created at process startup. Deployed and restarted on gravlax on 2026-09-18; live MCP checks verified the default and all three logins."
+      ]
+    },
+    {
+      "para": [
+        "Full details and examples: ",
+        {
+          "link": {
+            "href": "location-db/usage",
+            "text": "location-db/usage"
+          }
+        }
+      ]
+    },
+    {
+      "para": [
+        "Schema reference: ",
+        {
+          "link": {
+            "href": "location-db/schema",
+            "text": "location-db/schema"
+          }
+        }
+      ]
+    },
+    {
+      "para": [
+        "Architecture details: ",
+        {
+          "link": {
+            "href": "location-db/architecture",
+            "text": "location-db/architecture"
+          }
+        }
+      ]
+    },
+    {
+      "para": [
+        "The server does not retry SQL automatically. The requesting LLM decides whether to retry after inspecting the error. \"Please try again\" is generic error text, not proof of a stale connection. For a write with an uncertain outcome, check the resulting state before repeating it."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Email Tools (4 tools)"
+      }
+    },
+    {
+      "para": [
+        "Suite of tools for email management via local mail server (mail.critchley.biz). Support both IMAP (reading) and Brevo SMTP (sending). Designed for testing and integrating envoy orchestrator workflows."
+      ]
+    },
+    {
+      "para": [
+        "Available tools:"
+      ]
+    },
+    {
+      "para": [
+        "- **email_send**: Send email to mailbox (to, subject, body, optional headers)",
+        "- **email_list**: List emails in folder with headers (folder, search_criteria, max_results)",
+        "- **email_read**: Read full email with body and all headers (seq_id, folder)",
+        "- **email_list_folders**: List all mailbox folders (no arguments)"
+      ]
+    },
+    {
+      "para": [
+        "Complete documentation, testing workflows, and envoy integration examples: ",
+        {
+          "link": {
+            "href": "misc-server/email-tools",
+            "text": "misc-server/email-tools"
+          }
+        }
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Adding New Tools"
+      }
+    },
+    {
+      "para": [
+        "Edit misc_mcp_server.py in /home/john/py/gdata-server/. In _make_tool_server(), add a types.Tool entry to list_tools(), and add a handler branch in call_tool(). Include a notes key in the tool description pointing to documentation."
+      ]
+    },
+    {
+      "para": [
+        "Restart: sudo systemctl restart misc-mcp-server"
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Outlook/Hotmail Tools (4 tools)"
+      }
+    },
+    {
+      "para": [
+        "Read-only OAuth2 tools for the jsr_critchley@hotmail.com mailbox. Use outlook_search to find messages by folder, sender, recipient, subject, body text, date, or unread state; then use outlook_read with the returned folder and stable UID. outlook_folders and outlook_status provide discovery and counts."
+      ]
+    },
+    {
+      "para": [
+        "Complete parameters, examples, UID semantics, security guarantees, authentication, and troubleshooting: ",
+        {
+          "link": {
+            "href": "misc-server/outlook-mail",
+            "text": "misc-server/outlook-mail"
+          }
+        },
+        "."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "MCP server version"
+      }
+    },
+    {
+      "para": [
+        "Misc advertises explicit server version 1.27.1 from 2026-10-06 (previously the MCP SDK default 1.27.0). This is the serverInfo.version clients see during MCP initialisation and may display in setup screens. Whenever Misc implementation, tools, schemas or client-visible behaviour changes, bump the version argument in Server('misc', version=...) in misc_mcp_server.py, normally by one patch increment. Commit/deploy the bump with the change, restart misc-mcp-server.service, and verify the initialisation response. SDK upgrades must not implicitly define Misc’s version. Existing client screens may require reconnecting to refresh cached metadata."
+      ]
+    }
+  ],
+  "version": 4,
+  "updated": "2026-10-06"
+}

@@ -1,0 +1,422 @@
+{
+  "title": "MAINT — Notes Maintenance",
+  "version": 4,
+  "created": "2026-10-01",
+  "updated": "2026-10-06",
+  "tags": [
+    "maintenance",
+    "notes",
+    "organisation"
+  ],
+  "content": [
+    {
+      "heading": {
+        "level": 1,
+        "text": "MAINT — Notes Maintenance"
+      }
+    },
+    {
+      "para": [
+        "General maintenance procedures for the notes corpus, and log of completed passes. Outstanding jobs tracked at ",
+        {
+          "link": {
+            "href": "notes-review",
+            "text": "notes-review"
+          }
+        },
+        " (per-note checklist) and ",
+        {
+          "link": {
+            "href": "TODO",
+            "text": "TODO"
+          }
+        },
+        " (specific tasks)."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Maintenance procedures"
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "Per-note checklist"
+      }
+    },
+    {
+      "list": {
+        "ordered": true,
+        "items": [
+          "Metadata complete: title, version, created, updated, tags — all five present; tags meaningful; updated reflects the last real content change.",
+          "Parent link present if it is a child note — a para near the top reading \"Parent: [[parentkey]]\".",
+          "All linked keys valid — cross-check every href against the current key listing; fix or remove dead links.",
+          "Note type standard met (see below).",
+          "No stale facts: version numbers, machine/service names, config paths, bug workarounds.",
+          "JSONHTL format correct: multi-line code uses codeblock not inline code in a para; lists use {\"list\": {\"items\": [...]}} not bare arrays (bare arrays store but 500 the renderer).",
+          "Step sequences use ordered lists, not bullet lists.",
+          "Procedural notes: gotchas extracted into a named list near the end.",
+          "Mark done in notes-review with [x] DATE."
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "Note type standards"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "Procedural (how to do X, how to rebuild Y): ordered steps; gotchas list; cold-read test — an agent reading cold should succeed without needing context the author already had. Correct facts are paramount; verify against current reality when recently changed.",
+          "Reference (schemas, instruction sets, API docs): completeness; structure optimised for lookup not narrative; version numbers and dates noted explicitly.",
+          "Design/decision: preserve reasoning in full — \"why not X\" is as important as \"we chose Y\". Do not summarise away nuance. These notes are only useful if the reasoning survives.",
+          "Memory/context (memory/*, MEMORY/*): highest staleness priority — shape every future agent session; errors here cause repeated mistakes. Review first in any pass.",
+          "Todo/tracker: clear current-state summary at the top; completed items removed or struck; linked from TODO master index."
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "Staleness red flags"
+      }
+    },
+    {
+      "para": [
+        "Notes with these characteristics warrant careful verification before being trusted."
+      ]
+    },
+    {
+      "list": {
+        "items": [
+          "updated more than 6 months ago and covers active infrastructure.",
+          "Specific version numbers (port versions, Python versions, package names) — versions move.",
+          "\"TODO / still to verify\" sections written speculatively that may have since been resolved but never marked.",
+          "Machine or service names that may no longer exist.",
+          "\"Workaround for bug X\" — the upstream bug may have been fixed.",
+          "Notes for projects since completed, abandoned, or substantially redesigned."
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "Be conservative about"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "Split/merge: highest-risk operation — splitting breaks all incoming links to the original key; merging destroys a key permanently. Only where the case is overwhelming. Do last in any pass, never first.",
+          "Deletion: confirm with John before deleting anything potentially referenced. Prefer adding \"archived YYYY-MM-DD, superseded by [[key]]\" at the top to outright removal.",
+          "Renaming a key: never rename without updating every inbound link (CONTENTS, TRIGGERS, parent links, all referencing notes) and confirming no external system uses the old key."
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "Suggested working order for a pass"
+      }
+    },
+    {
+      "list": {
+        "ordered": true,
+        "items": [
+          "CONTENTS + TRIGGERS — navigation skeleton; everything else depends on it.",
+          "memory/* and MEMORY/* — agent behaviour notes; staleness here costs every session.",
+          "Active operational clusters (radagast, uucp, hosts) — high value, recently changed.",
+          "README/* — conventions; understand before applying elsewhere.",
+          "Active project notes (hibernate-on-approach, delayrepay, popit3, envoy living docs).",
+          "PROGRAMMING_RULES/*.",
+          "Lower-priority clusters (pwsafe, ask, gloss, Z80, ideas).",
+          "Archive pass last — once living docs are solid, easier to see what the historical records are archiving against."
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Maintenance log"
+      }
+    },
+    {
+      "para": [
+        "Chronological. Most-recent last."
+      ]
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "2026-10-01 — Notes Browser branch"
+      }
+    },
+    {
+      "para": [
+        "Started at ",
+        {
+          "link": {
+            "href": "CONTENTS",
+            "text": "CONTENTS"
+          }
+        },
+        " and audited the Notes Browser branch."
+      ]
+    },
+    {
+      "para": [
+        "Found a structural split: ",
+        {
+          "link": {
+            "href": "gdata-browser",
+            "text": "gdata-browser"
+          }
+        },
+        " acted as the apparent project root, while most substantial documentation lived under the ",
+        {
+          "code": "notes-browser/*"
+        },
+        " namespace. Architecture, kernel, plotting, SVG and fixed-note documentation were poorly discoverable."
+      ]
+    },
+    {
+      "para": [
+        "Created ",
+        {
+          "link": {
+            "href": "notes-browser",
+            "text": "notes-browser"
+          }
+        },
+        " as the project hub. Updated ",
+        {
+          "link": {
+            "href": "CONTENTS",
+            "text": "CONTENTS"
+          }
+        },
+        " to point there. Updated ",
+        {
+          "link": {
+            "href": "gdata-browser",
+            "text": "gdata-browser"
+          }
+        },
+        " to identify itself as the desktop-viewer overview and link back to the hub. Retained dated renderer-* notes in place (implementation history; moving would break links for no gain)."
+      ]
+    },
+    {
+      "para": [
+        {
+          "bold": "Verified 2026-10-04:"
+        },
+        " notes-browser, gdata-browser, and CONTENTS all read back correctly."
+      ]
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "2026-10-03 — hosts branch"
+      }
+    },
+    {
+      "para": [
+        "Audited the hosts branch from ",
+        {
+          "link": {
+            "href": "CONTENTS",
+            "text": "CONTENTS"
+          }
+        },
+        "."
+      ]
+    },
+    {
+      "para": [
+        {
+          "link": {
+            "href": "hosts/radagast",
+            "text": "hosts/radagast"
+          }
+        },
+        ": major rewrite — current-state section added (FreeBSD 15.1, QEMU/KVM, SSH ports, virtio-serial links), UUCP section linking to ",
+        {
+          "link": {
+            "href": "uucp/radagast",
+            "text": "uucp/radagast"
+          }
+        },
+        ", outstanding TODOs, historical sections moved to bottom."
+      ]
+    },
+    {
+      "para": [
+        {
+          "link": {
+            "href": "hosts/mac-mini",
+            "text": "hosts/mac-mini"
+          }
+        },
+        ": fixed duplicate paragraph and duplicate list items."
+      ]
+    },
+    {
+      "para": [
+        {
+          "link": {
+            "href": "hosts/nameko",
+            "text": "hosts/nameko"
+          }
+        },
+        ": fixed bare code block and bare array list; removed ephemeral IP address."
+      ]
+    },
+    {
+      "para": [
+        {
+          "link": {
+            "href": "CONTENTS",
+            "text": "CONTENTS"
+          }
+        },
+        ": removed three dead links; fixed bare Cloudflare entry; updated radagast and uucp descriptions."
+      ]
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "2026-10-05 — radagast/ml-ports-build, uucp/radagast"
+      }
+    },
+    {
+      "para": [
+        {
+          "link": {
+            "href": "radagast/ml-ports-build",
+            "text": "radagast/ml-ports-build"
+          }
+        },
+        ": Phase 2 list updated — added 7 gdal deps (freexl, netcdf, webp, xerces-c3, sqlite3, tcl86, libedit) with netcdf stale-workdir warning; gdal build line now uses ",
+        {
+          "code": "OPTIONS_UNSET=\"POPPLER SFCGAL SPATIALITE PGSQL\""
+        },
+        "; removed stale duplicate Phase 3 code block (science/py-xgboost); \"Still to verify\" section updated — all 13 ML packages confirmed, 230 packages total."
+      ]
+    },
+    {
+      "para": [
+        {
+          "link": {
+            "href": "uucp/radagast",
+            "text": "uucp/radagast"
+          }
+        },
+        ": devfs.rules corrected (ttyV0.2 group uucp → group dialer); para updated to explain uucico/uux are setgid dialer; two gotchas added — devfs group dialer requirement, and uux stdin attachment (dash before system!cmd required or rmail gets empty stdin, exits 65)."
+      ]
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "2026-10-06 — Corpus maintenance checkpoint"
+      }
+    },
+    {
+      "para": [
+        "Scanned 1,486 public-store keys. Found no bare array content blocks. The structural audit found 22 unresolved internal-looking hrefs, 588 records missing at least one standard metadata field, 464 child-shaped keys without an early parent link, and 35 legacy/non-canonical document shapes. These counts are diagnostic: private-store references, test fixtures, historical records, and namespaces without a parent key require classification rather than automatic rewriting."
+      ]
+    },
+    {
+      "para": [
+        "Created ",
+        {
+          "link": {
+            "href": "radagast",
+            "text": "radagast"
+          }
+        },
+        " as the machine hub and promoted it in ",
+        {
+          "link": {
+            "href": "CONTENTS",
+            "text": "CONTENTS"
+          }
+        },
+        ". Added the five missing governed areas to ",
+        {
+          "link": {
+            "href": "TRIGGERS",
+            "text": "TRIGGERS"
+          }
+        },
+        ". Normalised ",
+        {
+          "link": {
+            "href": "radagast/lessons-makeinfo-2026-09",
+            "text": "radagast/lessons-makeinfo-2026-09"
+          }
+        },
+        " and ",
+        {
+          "link": {
+            "href": "radagast/todo-next-session",
+            "text": "radagast/todo-next-session"
+          }
+        },
+        " from nested legacy documents to canonical JSONHTL."
+      ]
+    },
+    {
+      "para": [
+        "Added 84 unambiguous parent links across README, PROGRAMMING_RULES, Radagast/hosts/UUCP, hibernate-on-approach, gdata-server, popit3, delayrepay, ansible, ask, and SSL clusters. A repeat scan reduced the missing-parent count from 464 to 380."
+      ]
+    },
+    {
+      "para": [
+        "Reviewed ",
+        {
+          "link": {
+            "href": "MEMORY/claude",
+            "text": "MEMORY/claude"
+          }
+        },
+        " and memory/envoy/*. Confirmed several stale operational statements against the current Envoy tree; correction is deliberately left as the next focused pass rather than mixing factual rewrites into the structural batch. Progress and remaining classifications are recorded in ",
+        {
+          "link": {
+            "href": "TODO",
+            "text": "TODO"
+          }
+        },
+        "."
+      ]
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "2026-10-06 — Memory guidance corrections"
+      }
+    },
+    {
+      "para": [
+        "Corrected ",
+        {
+          "link": {
+            "href": "MEMORY/claude",
+            "text": "MEMORY/claude"
+          }
+        },
+        " to remove the obsolete MCP-put prohibition, explain canonical codeblocks and current revision-safe editing, and format its socket example as code. Added its MEMORY parent link. In ",
+        {
+          "link": {
+            "href": "memory/envoy/notes-system",
+            "text": "memory/envoy/notes-system"
+          }
+        },
+        ", corrected root-read semantics, replaced CLI-only write guidance, updated the grammar/tooling references, and flagged the missing deploy_notes.py path and absent local cron rather than inventing a replacement. Added parent/tags. Readbacks verified; notes-system marked done in notes-review, MEMORY/claude remains partial pending VNC/environment checks."
+      ]
+    }
+  ]
+}

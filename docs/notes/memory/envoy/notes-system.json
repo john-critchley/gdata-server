@@ -1,0 +1,199 @@
+{
+  "title": "Memory: Notes System",
+  "version": 3,
+  "created": "2026-02-28",
+  "updated": "2026-10-06",
+  "content": [
+    {
+      "heading": {
+        "level": 1,
+        "text": "Notes System"
+      }
+    },
+    {
+      "para": [
+        "Parent: ",
+        {
+          "link": {
+            "href": "memory/envoy",
+            "text": "memory/envoy"
+          }
+        }
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Commands"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "notes read [key] — read a note; without a key, read the root bootstrap note.",
+          "notes list — list all note keys.",
+          "notes load -d <key> <file> — load JSON from a file; -d deletes the local file after successful load.",
+          "notes delete <key> — delete a note; follow the conservative maintenance rules before deleting potentially referenced content."
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Write Workflow"
+      }
+    },
+    {
+      "para": [
+        "Choose the workflow by interface. MCP: fetch current revision, then patch/batch for targeted edits or put for a structural rewrite. CLI: create/edit a local JSON file and use notes load. Preserve metadata and links, increment version, update the date, then read back. See ",
+        {
+          "link": {
+            "href": "README/workflow",
+            "text": "README/workflow"
+          }
+        },
+        " and ",
+        {
+          "link": {
+            "href": "README/mcp-note-editing",
+            "text": "README/mcp-note-editing"
+          }
+        },
+        "."
+      ]
+    },
+    {
+      "para": [
+        "When updating an existing note: read it first, preserve all content and links, increment ",
+        {
+          "code": "version"
+        },
+        ", add ",
+        {
+          "code": "updated: YYYY-MM-DD"
+        },
+        "."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "JSONHTL Format"
+      }
+    },
+    {
+      "para": [
+        "Current block types: para, heading, codeblock, list, table, image, svg, details and section. Authoritative grammar and compatibility are in ",
+        {
+          "link": {
+            "href": "JSONHTL_SPEC",
+            "text": "JSONHTL_SPEC"
+          }
+        },
+        ", ",
+        {
+          "link": {
+            "href": "JSONHTL_SCHEMA",
+            "text": "JSONHTL_SCHEMA"
+          }
+        },
+        " and ",
+        {
+          "link": {
+            "href": "README/jsonhtl-extensions",
+            "text": "the extension registry"
+          }
+        },
+        "."
+      ]
+    },
+    {
+      "para": [
+        "Lists use {list: {items: [...], ordered?: boolean, label?: string}}. Canonical items are strings or inline arrays; legacy record objects are compatibility forms. Use explicit link objects for portable links; automatic path linking differs between consumers."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "What Well-Structured Means"
+      }
+    },
+    {
+      "para": [
+        "• Index notes link to children; children link back up to parent",
+        "• CONTENTS must be updated whenever a new note subtree is created — orphaned notes are invisible to Envoy",
+        "• Version + date on every update; never append-only",
+        "• Semantic organisation by topic, not chronological",
+        "• No note is an island — always link up after creating"
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Key Reference Notes"
+      }
+    },
+    {
+      "para": [
+        "• ",
+        {
+          "link": {
+            "href": "README",
+            "text": "README"
+          }
+        },
+        " — notes system overview",
+        "• ",
+        {
+          "link": {
+            "href": "README/workflow",
+            "text": "README/workflow"
+          }
+        },
+        " — full conventions",
+        "• ",
+        {
+          "link": {
+            "href": "CONTENTS",
+            "text": "CONTENTS"
+          }
+        },
+        " — discovery index; must be current",
+        "• ",
+        {
+          "link": {
+            "href": "PROGRAMMING_RULES",
+            "text": "PROGRAMMING_RULES"
+          }
+        },
+        " — coding standards"
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Tooling (in ~/py/envoy)"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "~/py/envoy/jsonhtl_renderer.py — shared HTML renderer; override render_link_href for navigation targets.",
+          "~/py/envoy/jsonhtl_to_html.py — static exporter using the shared renderer.",
+          "~/py/gdata-server/notes-browser/notes_browser.py — maintained desktop viewer; the older Envoy viewer remains a separate consumer.",
+          "~/py/gdata-server/lint_jsonhtl.py — live/offline schema validation and recursive semantic checks."
+        ]
+      }
+    },
+    {
+      "para": [
+        "Historical deploy reference: ~/py/envoy/utils/deploy_notes.py and the hourly :28 cron were previously recorded here. On 2026-10-06 that path was absent and no matching entry was found in John's local crontab. Do not import or invoke that stale path; locate the current deployment procedure before relying on it. No replacement deployment job was established by this review."
+      ]
+    }
+  ],
+  "tags": [
+    "memory",
+    "envoy",
+    "notes"
+  ]
+}

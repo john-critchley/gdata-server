@@ -366,7 +366,7 @@ class NotesHTMLRenderer:
                 elif 'image' in block:
                     html.append(svg_render.image_block_to_html(block['image'], self._escape))
                 elif 'details' in block:
-                    html.append(self._render_details(block['details']))
+                    html.append(self._render_details(block['details'], level=level))
                 else:
                     # Unknown block types are ignored to match notes.wsgi behavior.
                     continue
@@ -548,7 +548,7 @@ class NotesHTMLRenderer:
         rows.append(f'</{tag}>')
         return '\n'.join(rows)
 
-    def _render_details(self, details_dict):
+    def _render_details(self, details_dict, level=2):
         """Render a details block.
 
         Known gap: wx.html.HtmlWindow has no <details>/<summary> support
@@ -563,7 +563,7 @@ class NotesHTMLRenderer:
         if not isinstance(details_dict, dict):
             return ''
         summary = self._escape(str(details_dict.get('summary', '') or ''))
-        nested = self._render_jsonhtl_blocks(details_dict.get('content', []) or [])
+        nested = self._render_jsonhtl_blocks(details_dict.get('content', []) or [], level=level)
         return (
             '<table width="100%" style="border: 1px solid #ccc; margin: 8px 0;" cellpadding="0" cellspacing="0">'
             f'<tr><td bgcolor="#eeeeee" style="padding: 6px 10px;"><b>{summary}</b></td></tr>'
@@ -595,6 +595,8 @@ class NotesHTMLRenderer:
             f'<table style="border-collapse: collapse; width: 100%; margin: 8px 0; '
             f'font-family: {self.font_family}; font-size: {self.font_size_pt}pt;">'
         ]
+        if table.get("caption"):
+            html.append(f'<caption>{self._escape(str(table["caption"]))}</caption>')
         # Header row — dark background, white text (matches .bks th style)
         if columns:
             html.append('<tr>')

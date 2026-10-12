@@ -1,0 +1,556 @@
+{
+  "title": "JSONHTL Linter Specification",
+  "version": 7,
+  "updated": "2026-10-06",
+  "content": [
+    {
+      "heading": {
+        "level": 1,
+        "text": "JSONHTL Linter Specification"
+      }
+    },
+    {
+      "para": [
+        "Specification for a strict validator (linter) for JSONHTL documents. The linter is stricter than any renderer -- it flags anything not in the spec or a registered extension, even if renderers silently ignore it. The goal is to catch bad documents before they enter the store, not to fix them. When a document fails, the linter should tell the writer where to find the correct spec so they can update their source of information."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Related Notes"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          {
+            "link": {
+              "href": "JSONHTL_SPEC",
+              "text": "JSONHTL_SPEC"
+            }
+          },
+          {
+            "link": {
+              "href": "JSONHTL_SCHEMA",
+              "text": "JSONHTL_SCHEMA"
+            }
+          },
+          {
+            "link": {
+              "href": "README/format",
+              "text": "README/format"
+            }
+          },
+          {
+            "link": {
+              "href": "README/runnable",
+              "text": "README/runnable"
+            }
+          },
+          {
+            "link": {
+              "href": "gdata-server/todo",
+              "text": "gdata-server/todo"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Code"
+      }
+    },
+    {
+      "para": [
+        "The linter is implemented in two Python files on the DAP AWS instance:"
+      ]
+    },
+    {
+      "list": {
+        "items": [
+          {
+            "link": {
+              "href": "gdata-server/linter/module",
+              "text": "gdata-server/linter/module"
+            }
+          },
+          " -- ",
+          {
+            "code": "jsonhtl_lint.py"
+          },
+          ": the validator module. ",
+          {
+            "code": "validate(doc)"
+          },
+          " is the primary entry point.",
+          {
+            "link": {
+              "href": "gdata-server/linter/cli",
+              "text": "gdata-server/linter/cli"
+            }
+          },
+          " -- ",
+          {
+            "code": "lint_jsonhtl.py"
+          },
+          ": command-line tool, takes ",
+          {
+            "code": "file://"
+          },
+          " or ",
+          {
+            "code": "http://"
+          },
+          " URLs."
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Test Findings"
+      }
+    },
+    {
+      "para": [
+        {
+          "link": {
+            "href": "gdata-server/linter/findings-2026-07-06",
+            "text": "2026-07-06 first test run"
+          }
+        },
+        " -- 4 notes tested; ",
+        {
+          "code": "gdata-server/todo"
+        },
+        " failed with 2 unregistered inline types (",
+        {
+          "code": "em"
+        },
+        ", ",
+        {
+          "code": "strong"
+        },
+        ") and 1 bare-string para. Decision pending: register or fix."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Schema Location and Sync Rule"
+      }
+    },
+    {
+      "para": [
+        "The machine-readable schema is at ",
+        {
+          "link": {
+            "href": "JSONHTL_SCHEMA",
+            "text": "JSONHTL_SCHEMA"
+          }
+        },
+        " (JSON Schema Draft-07). The linter loads it dynamically from that note at runtime. This note and JSONHTL_SCHEMA must be kept in sync for structural changes. Semantic-only changes (e.g. adding a description to a field) may not require updating the other. When in doubt, update both."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Consumers -- Things That Use JSONHTL"
+      }
+    },
+    {
+      "para": [
+        "Any structural change to the spec or schema may require updates in these:"
+      ]
+    },
+    {
+      "list": {
+        "items": [
+          {
+            "link": {
+              "href": "gdata-server/server",
+              "text": "gdata_mcp_server.py"
+            }
+          },
+          " -- REST and MCP server; hosts the notes_web.py renderer",
+          {
+            "link": {
+              "href": "gdata-server",
+              "text": "notes_web.py"
+            }
+          },
+          " -- HTML renderer at /notes/; handles para, heading, codeblock (lang/body), table, list, bullet_list (unregistered), writable_note (unregistered), bold inline",
+          "notes_browser.py and notes_browser_runnable.py -- wxPython GUI; handles same block types; has compatibility fallback for codeblock 'text' alias (to be removed once linter is enforced)",
+          "notes_client.py -- CLI client",
+          "Agents (Claude, Codex, Envoy) -- write notes via MCP or REST"
+        ]
+      }
+    },
+    {
+      "para": [
+        "The GUI renderer (notes_browser.py) currently accepts the wrong codeblock field name ",
+        {
+          "code": "text"
+        },
+        " as a fallback. This fallback should be removed once the linter is enforced at the write path. See Future Improvements."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "What the Linter Checks"
+      }
+    },
+    {
+      "para": [
+        "The linter first validates the document against the JSON Schema in ",
+        {
+          "link": {
+            "href": "JSONHTL_SCHEMA",
+            "text": "JSONHTL_SCHEMA"
+          }
+        },
+        ". It then applies additional checks that JSON Schema cannot express."
+      ]
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "Document Level"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "content is present (required)",
+          "title if present is a string",
+          "version if present is an integer or string",
+          "updated and created if present match YYYY-MM-DD",
+          "tags if present is an array of strings",
+          "runnable if present is a boolean",
+          "Unknown top-level metadata is permitted by the base format"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "Content"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "content must be a string or an array",
+          "If content is a bare string it is flagged as non-canonical shorthand (spec permits it; linter flags it)"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "Blocks"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "Each block must be a JSON object with exactly one identifying key",
+          "Known block types: para, heading, codeblock, list, table, image, svg, details, section",
+          "Any other block key is flagged as an unrecognised block type",
+          "Extra keys alongside the block type key are flagged"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "para block"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "Value must be a string or array; bare string is flagged as non-canonical shorthand",
+          "Each inline element must be a string, a link object, a code object, or a bold object",
+          "Any other inline element type is flagged as unrecognised"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "heading block"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "Must have level (integer, 1-6) and text (string)",
+          "No other keys permitted",
+          "level outside 1-6 is flagged"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "codeblock block"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "Must have lang (string) and body (string)",
+          "If the field text is present instead of or alongside body: flagged with alias error (see Error Messages)",
+          "If the field language is present instead of or alongside lang: flagged with alias error",
+          "exec if present must be boolean; only valid when document has runnable: true at top level",
+          "name if present must be a string; only valid when runnable: true; must be unique within the document",
+          "No other keys permitted"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "list block"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "Must have items (array)",
+          "ordered if present must be boolean",
+          "label if present must be string",
+          "No other keys permitted"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "table block"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "Must have columns (array of strings) and rows (array of arrays)",
+          "Every row must have the same number of cells as there are columns (JSON Schema cannot check this; linter checks it in code)",
+          "Each cell is a string or a list of inline elements (same inline model as para); every inline element in a list cell must itself be valid (string, link, code, or bold)",
+          "No other keys permitted",
+          "caption is an optional string and renders above the table."
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "image / svg / details blocks (JSONHTL_SPEC base)"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "image: must have format (string) and data (base64 string); optional alt, caption; no other keys.",
+          "svg: must have body (string, raw SVG XML); optional alt, caption; no other keys.",
+          "details: must have summary (string) and content (array of blocks, validated recursively); no other keys.",
+          "Added to JSONHTL_SPEC 2026-07-17; registered in JSONHTL_SCHEMA and this note 2026-08-04. Previously spec-legal but would have failed schema validation (the schema's closed oneOf pre-dated them)."
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "section block (nested container)"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "Must have title (string) and content (array of blocks, validated recursively); level optional (integer 1-6, defaults to nesting depth); no other keys.",
+          "Proposal proposals/section-editing; registered 2026-08-04. Both renderers render it (Phase 0). Coexists with the legacy flat heading block during migration; a normaliser converts flat -> nested."
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "link inline element"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "Must have href (string) and text (string)",
+          "No other keys permitted"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "code inline element"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "Value must be a string"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 3,
+        "text": "bold inline element (registered extension)"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "Value must be a string",
+          "Supported by both renderers; not in JSONHTL_SPEC base; accepted without error"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Checks Beyond JSON Schema"
+      }
+    },
+    {
+      "para": [
+        "These cannot be expressed in JSON Schema and must be implemented in linter code:"
+      ]
+    },
+    {
+      "list": {
+        "items": [
+          "Alias detection: codeblock with 'text' or 'language' fields (produces specific error messages, not generic schema failures)",
+          "Cross-field validation: exec and name in codeblock require runnable: true at document level",
+          "name uniqueness: codeblock name values must be unique within a document",
+          "Table row length: each row must have exactly len(columns) cells",
+          "Table cell content: each cell is a string or an inline-element list; inline elements in a cell are validated the same way as para inline elements"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Error Messages"
+      }
+    },
+    {
+      "para": [
+        "When the linter finds a problem it should say what is wrong, what the correct form is, and where to find the spec. The intent is that an LLM or human writer can immediately update their source of information and not repeat the mistake."
+      ]
+    },
+    {
+      "para": [
+        "Example for codeblock alias:"
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "text",
+        "body": "ERROR block 3 (codeblock): field 'text' is not valid -- the correct field name is 'body'. Where did you get this syntax from? The authoritative spec is JSONHTL_SCHEMA (note key) and gdata-server/linter. Update your source of information before writing further notes."
+      }
+    },
+    {
+      "para": [
+        "Example for unknown block type:"
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "text",
+        "body": "ERROR block 5: unknown block type 'bullet_list'. Valid types are: para, heading, codeblock, list, table, image, svg, details, section. Where did you get this syntax from? See JSONHTL_SCHEMA and gdata-server/linter."
+      }
+    },
+    {
+      "para": [
+        "Example for schema validation failure (generic):"
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "text",
+        "body": "ERROR block 2 (heading): missing required field 'level'. See JSONHTL_SCHEMA for the correct structure."
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "CLI Design"
+      }
+    },
+    {
+      "para": [
+        "The linter is a Python command-line script. It fetches the schema from the live notes store (or accepts a local schema file for offline use), validates a document, and prints all errors to stdout."
+      ]
+    },
+    {
+      "codeblock": {
+        "lang": "bash",
+        "body": "# Lint a single note by key\npython lint_jsonhtl.py --key gdata-server/linter\n\n# Lint a local JSON file\npython lint_jsonhtl.py --file /path/to/doc.json\n\n# Walk all keys and lint each in turn\npython lint_jsonhtl.py --all\n\n# Use a local schema file instead of fetching from the store\npython lint_jsonhtl.py --schema /path/to/schema.json --key some/note\n\n# Exit code: 0 if clean, 1 if any errors found"
+      }
+    },
+    {
+      "para": [
+        "The notes CLI loader (",
+        {
+          "code": "notes load"
+        },
+        ") should enforce a linter pass before uploading a document. A ",
+        {
+          "code": "--no-lint"
+        },
+        " flag overrides this. This keeps bad documents out of the store at the write path."
+      ]
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Future Improvements"
+      }
+    },
+    {
+      "list": {
+        "items": [
+          "API endpoint: POST /lint/{key} -- validate any note by key via the REST API; returns list of issues as JSON",
+          "Remove codeblock 'text' alias fallback from notes_browser.py once linter is enforced at the write path",
+          "Register or formally reject bullet_list and writable_note block types",
+          "Linter output as a note: write results to linter/report for browser review after an --all run",
+          "Integrate linter into notes_web.py to render a warning banner for non-conforming notes"
+        ]
+      }
+    },
+    {
+      "heading": {
+        "level": 2,
+        "text": "Implemented 2026-10-06"
+      }
+    },
+    {
+      "para": [
+        "The gdata-server repository now provides lint_jsonhtl.py with --key, --file, --all, --schema, --url, --metadata and --links. It validates recursively using the live JSONHTL_SCHEMA by default and checks aliases, runnable fields/name uniqueness and table row widths. --metadata opts into all five notes-store fields; --links checks hrefs against the public key set and needs manual classification for private-store references. Offline mirror: jsonhtl_schema.json. Registry: ",
+        {
+          "link": {
+            "href": "README/jsonhtl-extensions",
+            "text": "README/jsonhtl-extensions"
+          }
+        },
+        ". Write-path enforcement and automatic normalisation remain future work."
+      ]
+    },
+    {
+      "para": [
+        "strong, em and italic are registered string-valued inline forms alongside bold. The schema accepts these consistently with all HTML and desktop consumers."
+      ]
+    }
+  ]
+}
