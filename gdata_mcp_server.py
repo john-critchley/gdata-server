@@ -50,6 +50,7 @@ import gdata
 import gdata_oauth
 import jsonhtl_canon
 import notes_web
+from notes_version import SERVER_VERSION
 
 logging.basicConfig(
     level=os.getenv('LOG_LEVEL', 'INFO'),
@@ -1148,7 +1149,7 @@ def _make_tool_server(db_path: str, store_name: str = "default") -> Server:
         "Begin by calling get with key 'README'; that note is the canonical entry point "
         "for the complete documentation, conventions, and linked operating guides."
     )
-    server = Server("gdata", instructions=bootstrap)
+    server = Server("gdata", version=SERVER_VERSION, instructions=bootstrap)
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
@@ -1528,14 +1529,15 @@ def make_mcp_app(db_path: str, store_name: str = "default") -> Starlette:
 # ---------------------------------------------------------------------------
 
 async def main():
-    gdata_oauth.startup_check()
     parser = argparse.ArgumentParser(description="gdata REST + MCP server")
+    parser.add_argument("--version", action="version", version=f"Notes {SERVER_VERSION}")
     parser.add_argument("--rest-port", type=int, default=int(os.getenv("GDATA_SERVER_PORT", 8020)))
     parser.add_argument("--mcp-port",  type=int, default=int(os.getenv("GDATA_MCP_PORT",    8022)))
     parser.add_argument("--host",      default=os.getenv("GDATA_SERVER_HOST", "127.0.0.1"))
     parser.add_argument("--db",        default=os.getenv("GDBM_PATH", ".gdbm"))
     parser.add_argument("--name",      default=os.getenv("GDATA_STORE_NAME", "default"))
     args = parser.parse_args()
+    gdata_oauth.startup_check()
 
     log_level = os.getenv('LOG_LEVEL', 'info').lower()
 

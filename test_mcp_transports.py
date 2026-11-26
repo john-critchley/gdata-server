@@ -31,6 +31,7 @@ import uvicorn
 
 import gdata_oauth
 from gdata_mcp_server import make_mcp_app
+from notes_version import SERVER_VERSION
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
@@ -141,6 +142,7 @@ class TestSSETransport:
                 async with ClientSession(*streams) as session:
                     result = await session.initialize()
                     assert result.serverInfo.name == "gdata"
+                    assert result.serverInfo.version == SERVER_VERSION
                     assert "get" in (result.instructions or "")
                     assert "README" in (result.instructions or "")
 
@@ -322,6 +324,7 @@ class TestStreamableHTTPTransport:
                 async with ClientSession(read, write) as session:
                     result = await session.initialize()
                     assert result.serverInfo.name == "gdata"
+                    assert result.serverInfo.version == SERVER_VERSION
 
         run_async(go())
 
